@@ -1,0 +1,4 @@
+build/Install-SebRadio.ps1
+build/*.exe
+src/lib/
+*.log
