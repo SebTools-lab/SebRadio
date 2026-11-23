@@ -17,7 +17,8 @@ Prosty odtwarzacz radia internetowego dla Windows: wklejasz link do stacji, radi
 - **Historia utworów**: rozpoznane (Shazam) i podawane przez stację tytuły zapisują się z datą, stacją i linkami do YouTube / Apple Music / Shazam; okno Historia z wyszukiwaniem; plik `%AppData%\SebRadio\historia.csv` (Excel).
 - **Wyszukiwarka stacji** w otwartej bazie [radio-browser.info](https://www.radio-browser.info/) (nazwa, kraj).
 - **Automatyczne wznawianie** po zerwaniu połączenia i **wyłącznik czasowy** (15-120 min, z wyciszaniem).
-- Zapamiętuje ostatni link i głośność. Okno Ustawienia: X do zasobnika, wznawianie, język PL / EN.
+- Zapamiętuje ostatni link i głośność. Okno Ustawienia: X do zasobnika, wznawianie, język PL / EN, kolory (akcent, wykończenie, tło).
+- Ciemny motyw z niebieskimi przyciskami i pomarańczowymi obramowaniami (od wersji 3.3).
 
 ## Instalacja
 
@@ -56,7 +57,8 @@ A simple internet radio player for Windows: paste a station link, it plays, and 
 - **Song history**: recognized (Shazam) and station-sent titles are saved with date, station and YouTube / Apple Music / Shazam links; History window with search; file `%AppData%\SebRadio\historia.csv` (Excel).
 - **Station search** in the open [radio-browser.info](https://www.radio-browser.info/) database (name, country).
 - **Automatic reconnect** when the connection drops and a **sleep timer** (15-120 min, with fade-out).
-- Remembers the last link and volume. Settings window: X to tray, reconnect, PL / EN language.
+- Remembers the last link and volume. Settings window: X to tray, reconnect, PL / EN language, colors (accent, trim, background).
+- Dark theme with blue buttons and orange borders (since version 3.3).
 
 ### Install
 

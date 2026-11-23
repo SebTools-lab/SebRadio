@@ -1,4 +1,4 @@
-﻿# SebRadio 3.2 - prosty odtwarzacz radia internetowego / simple internet radio player (silnik/engine: BASS)
+﻿# SebRadio 3.3 - prosty odtwarzacz radia internetowego / simple internet radio player (silnik/engine: BASS)
 # Rozpoznawanie utworów: algorytm sygnatury Shazam przeniesiony z shazam-for-real (ISC License, Copyright (c) Aleksey Martynov)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -20,6 +20,7 @@ $ctFile = Join-Path $cfgDir 'kraje.txt'
 $recFile = Join-Path $cfgDir 'wznawianie.txt'
 $histFile = Join-Path $cfgDir 'historia.csv'
 $histOptFile = Join-Path $cfgDir 'historia-stacje.txt'
+$colFile = Join-Path $cfgDir 'kolory.txt'
 
 # ---------- język / language ----------
 $lang = ''
@@ -69,6 +70,8 @@ pl = @{
     HColTime = 'Kiedy'; HColArtist = 'Wykonawca'; HColTitle = 'Tytuł'; HColStation = 'Stacja'; HColSource = 'Źródło'; HCount = 'Pozycji: {0}'
     HCopy = 'Kopiuj'; HDelete = 'Usuń'; HClear = 'Wyczyść...'; HOpen = 'Otwórz w Excelu'; HClearAsk = 'Usunąć całą historię ({0} pozycji)?'; HDelAsk = 'Usunąć zaznaczone pozycje ({0})?'
     HLogStream = 'Zapisuj w historii tytuły podawane przez stację (nie tylko z Shazama)'; HHint = 'Dwuklik = YouTube. Plik: %AppData%\SebRadio\historia.csv'
+    NowTag = 'Teraz gra'; RecHead = 'Rozpoznany utwór (Shazam)'; CopySong = 'Kopiuj tytuł utworu'; CopyStream = 'Kopiuj adres strumienia'; CopyDetails = 'Kopiuj wszystkie informacje'; SleepShort = 'Wyłącznik'; MiniShort = 'Mini'
+    Colors = 'Kolory'; ColAccent = 'Akcent (przyciski):'; ColFinish = 'Wykończenie (linie, ramki):'; ColBg = 'Tło:'; ColDefault = 'Domyślne kolory'; ColHint = 'Kliknij kolorowy prostokąt, aby wybrać kolor.'
     Sleep = 'Wyłącznik czasowy'; SleepLeft = 'Wyłącznik: {0}'; SleepOff = 'Wyłączony'; SleepMin = '{0} min'; SleepEnd = 'Wyłącznik czasowy zatrzymał radio.'
     FileHeader = @('# SebRadio - zapisane stacje', '# Jedna stacja w linii:  Nazwa = link', '# Możesz dopisać wiele stacji naraz i zapisać plik - SebRadio wczyta je samo.', '# Linie zaczynające się od # są pomijane. Program zapisuje ten plik na nowo przy zmianach w oknie Stacje.')
 }
@@ -114,6 +117,8 @@ en = @{
     HColTime = 'When'; HColArtist = 'Artist'; HColTitle = 'Title'; HColStation = 'Station'; HColSource = 'Source'; HCount = 'Entries: {0}'
     HCopy = 'Copy'; HDelete = 'Delete'; HClear = 'Clear...'; HOpen = 'Open in Excel'; HClearAsk = 'Delete the whole history ({0} entries)?'; HDelAsk = 'Delete the selected entries ({0})?'
     HLogStream = 'Save song titles sent by the station to the history (not only Shazam)'; HHint = 'Double-click = YouTube. File: %AppData%\SebRadio\historia.csv'
+    NowTag = 'Now playing'; RecHead = 'Recognized song (Shazam)'; CopySong = 'Copy song title'; CopyStream = 'Copy stream address'; CopyDetails = 'Copy all details'; SleepShort = 'Sleep'; MiniShort = 'Mini'
+    Colors = 'Colors'; ColAccent = 'Accent (buttons):'; ColFinish = 'Trim (lines, borders):'; ColBg = 'Background:'; ColDefault = 'Default colors'; ColHint = 'Click a color box to pick a color.'
     Sleep = 'Sleep timer'; SleepLeft = 'Sleep timer: {0}'; SleepOff = 'Off'; SleepMin = '{0} min'; SleepEnd = 'The sleep timer stopped the radio.'
     FileHeader = @('# SebRadio - saved stations', '# One station per line:  Name = link', '# You can add many stations at once and save the file - SebRadio picks them up automatically.', '# Lines starting with # are ignored. The program rewrites this file when you change stations in the Stations window.')
 }
@@ -712,7 +717,7 @@ function Set-Info([string]$name, $value) {
     $v = [string]$value
     if (-not $v) { $v = '-' }
     $item = $lv.Items[$name]
-    if ($item -and $item.SubItems[1].Text -ne $v) { $item.SubItems[1].Text = $v }
+    if ($item -and $item.SubItems[1].Text -ne $v) { $item.SubItems[1].Text = $v; Update-NowCard }
 }
 
 function Clear-Info { foreach ($f in $fields) { Set-Info $f '' } }
@@ -970,13 +975,18 @@ function Refresh-StationUI {
     [void]$miniMenu.Items.Add((New-Object Windows.Forms.ToolStripSeparator))
     $mf = $miniMenu.Items.Add($T.MiniFull)
     $mf.Add_Click({ Show-Main })
+    $stMenu.Items.Clear()
+    Add-StationItems $stMenu.Items
+    [void]$stMenu.Items.Add((New-Object Windows.Forms.ToolStripSeparator))
+    $mm = $stMenu.Items.Add(($T.Manage -replace '\.+$', '') + '...')
+    $mm.Add_Click({ Show-Stations 0 })
     if ($mgr.Visible) { Fill-Mine }
     Mark-Current
 }
 
 function Mark-Current {
     $playing = Test-Playing
-    foreach ($coll in @($miStations.DropDownItems, $miniMenu.Items)) {
+    foreach ($coll in @($miStations.DropDownItems, $miniMenu.Items, $stMenu.Items)) {
         foreach ($it in $coll) {
             if ($it -is [Windows.Forms.ToolStripMenuItem] -and $it.Tag) { $it.Checked = ($playing -and [string]$it.Tag -eq $script:curUrl) }
         }
@@ -1094,8 +1104,10 @@ function Update-SleepText {
         $left = $script:sleepAt - (Get-Date)
         if ($left.TotalSeconds -lt 0) { $left = [TimeSpan]::Zero }
         $t = $T.SleepLeft -f $left.ToString($(if ($left.TotalHours -ge 1) { 'h\:mm\:ss' } else { 'mm\:ss' }))
-    } else { $t = $T.Sleep }
-    if ($btnSleep.Text -ne $t) { $btnSleep.Text = $t; $miSleep.Text = $t }
+        $bt = $left.ToString($(if ($left.TotalHours -ge 1) { 'h\:mm\:ss' } else { 'mm\:ss' }))
+    } else { $t = $T.Sleep; $bt = $T.SleepShort }
+    if ($btnSleep.Text -ne $bt) { $btnSleep.Text = $bt }
+    if ($miSleep.Text -ne $t) { $miSleep.Text = $t }
 }
 
 function Restart-App {
@@ -1106,57 +1118,516 @@ function Restart-App {
     $form.Close()
 }
 
+# ---------- wygląd / theme ----------
+if (-not ('SebTheme' -as [type])) {
+Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Windows.Forms;
+using System.Runtime.InteropServices;
+
+public static class SebTheme {
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] static extern int SetWindowTheme(IntPtr h, string app, string id);
+    static int Ref(Color c) { return c.R | (c.G << 8) | (c.B << 16); }
+    static void Set(IntPtr h, int attr, int v) { try { DwmSetWindowAttribute(h, attr, ref v, 4); } catch { } }
+    // pasek tytułu i obramowanie okna (Windows 11) / title bar and window border (Windows 11)
+    public static void Window(IntPtr h, bool dark, Color caption, Color border, Color text) {
+        Set(h, 20, dark ? 1 : 0);
+        Set(h, 35, Ref(caption));
+        Set(h, 34, Ref(border));
+        Set(h, 36, Ref(text));
+    }
+    public static void Round(IntPtr h) { Set(h, 33, 2); }
+    public static void Scroll(IntPtr h, bool dark) { try { SetWindowTheme(h, dark ? "DarkMode_Explorer" : "Explorer", null); } catch { } }
+}
+
+public class SebColors : ProfessionalColorTable {
+    public Color Bg = Color.FromArgb(28, 32, 40);
+    public Color Sel = Color.FromArgb(37, 99, 235);
+    public Color Line = Color.FromArgb(46, 52, 64);
+    public override Color ToolStripDropDownBackground { get { return Bg; } }
+    public override Color ImageMarginGradientBegin { get { return Bg; } }
+    public override Color ImageMarginGradientMiddle { get { return Bg; } }
+    public override Color ImageMarginGradientEnd { get { return Bg; } }
+    public override Color MenuItemSelected { get { return Sel; } }
+    public override Color MenuItemSelectedGradientBegin { get { return Sel; } }
+    public override Color MenuItemSelectedGradientEnd { get { return Sel; } }
+    public override Color MenuItemPressedGradientBegin { get { return Sel; } }
+    public override Color MenuItemPressedGradientEnd { get { return Sel; } }
+    public override Color MenuItemBorder { get { return Sel; } }
+    public override Color MenuBorder { get { return Line; } }
+    public override Color SeparatorDark { get { return Line; } }
+    public override Color SeparatorLight { get { return Line; } }
+}
+
+public class SebRenderer : ToolStripProfessionalRenderer {
+    public Color Fore = Color.White;
+    public Color Muted = Color.Gray;
+    public Color Check = Color.Orange;
+    public SebRenderer(SebColors c) : base(c) { RoundedEdges = false; }
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) {
+        e.TextColor = (e.Item.Enabled ? Fore : Muted);
+        base.OnRenderItemText(e);
+    }
+    protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e) {
+        e.ArrowColor = Fore;
+        base.OnRenderArrow(e);
+    }
+    protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e) {
+        TextRenderer.DrawText(e.Graphics, "✓", e.Item.Font, e.ImageRectangle, Check, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+    }
+}
+
+// suwak głośności rysowany w kolorach motywu / volume slider drawn in theme colors
+public class SebSlider : Control {
+    int val = 50, min = 0, max = 100;
+    public Color TrackColor = Color.Gray;
+    public Color FillColor = Color.Orange;
+    public Color ThumbColor = Color.Orange;
+    public int TickFrequency { get; set; }
+    public event EventHandler Scroll;
+    public SebSlider() {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+        TabStop = true; Cursor = Cursors.Hand;
+    }
+    public int Minimum { get { return min; } set { min = value; Invalidate(); } }
+    public int Maximum { get { return max; } set { max = value; Invalidate(); } }
+    public int Value {
+        get { return val; }
+        set { int v = Math.Max(min, Math.Min(max, value)); if (v != val) { val = v; Invalidate(); } }
+    }
+    void Change(int v) {
+        v = Math.Max(min, Math.Min(max, v));
+        if (v == val) return;
+        val = v; Invalidate();
+        if (Scroll != null) Scroll(this, EventArgs.Empty);
+    }
+    void FromX(int x) {
+        int pad = Height / 2; int w = Math.Max(1, Width - 2 * pad);
+        Change(min + (int)Math.Round((double)(x - pad) * (max - min) / w));
+    }
+    protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); Focus(); if (e.Button == MouseButtons.Left) { Capture = true; FromX(e.X); } }
+    protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if (Capture && e.Button == MouseButtons.Left) FromX(e.X); }
+    protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); Capture = false; }
+    protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); Change(val + (e.Delta > 0 ? 2 : -2)); }
+    protected override bool IsInputKey(Keys k) { return k == Keys.Left || k == Keys.Right || k == Keys.Up || k == Keys.Down || base.IsInputKey(k); }
+    protected override void OnKeyDown(KeyEventArgs e) {
+        base.OnKeyDown(e);
+        if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Down) Change(val - 1);
+        else if (e.KeyCode == Keys.Right || e.KeyCode == Keys.Up) Change(val + 1);
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.Clear(BackColor);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        int pad = Height / 2, cy = Height / 2, w = Width - 2 * pad;
+        float frac = max > min ? (float)(val - min) / (max - min) : 0f;
+        int tx = pad + (int)(w * frac);
+        using (Pen p = new Pen(TrackColor, 6)) { p.StartCap = System.Drawing.Drawing2D.LineCap.Round; p.EndCap = System.Drawing.Drawing2D.LineCap.Round; g.DrawLine(p, pad, cy, pad + w, cy); }
+        if (tx > pad) using (Pen p = new Pen(FillColor, 6)) { p.StartCap = System.Drawing.Drawing2D.LineCap.Round; p.EndCap = System.Drawing.Drawing2D.LineCap.Round; g.DrawLine(p, pad, cy, tx, cy); }
+        int r = Math.Max(4, Height / 2 - 3);
+        using (SolidBrush b = new SolidBrush(ThumbColor)) g.FillEllipse(b, tx - r, cy - r, 2 * r, 2 * r);
+    }
+}
+'@
+}
+
+# czcionka ikon Windows 11 / Windows 11 icon font
+$script:iconFont = 'Segoe MDL2 Assets'
+try { if ((New-Object Drawing.Text.InstalledFontCollection).Families.Name -contains 'Segoe Fluent Icons') { $script:iconFont = 'Segoe Fluent Icons' } } catch {}
+$script:glyph = @{}
+function New-GlyphImage([int]$code, [int]$size, $color) {
+    $bmp = New-Object Drawing.Bitmap($size, $size)
+    $g = [Drawing.Graphics]::FromImage($bmp)
+    $g.TextRenderingHint = 'AntiAliasGridFit'
+    $fnt = New-Object Drawing.Font($script:iconFont, [single]($size * 0.72), [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
+    $sf = New-Object Drawing.StringFormat
+    $sf.Alignment = 'Center'; $sf.LineAlignment = 'Center'
+    $br = New-Object Drawing.SolidBrush($color)
+    $g.DrawString([string][char]$code, $fnt, $br, (New-Object Drawing.RectangleF(0, 0, $size, $size)), $sf)
+    $br.Dispose(); $sf.Dispose(); $fnt.Dispose(); $g.Dispose()
+    return $bmp
+}
+function Set-Glyph($b, [int]$code, [int]$size, [string]$col, [string]$lay) { $script:glyph[$b] = @{ G = $code; S = $size; C = $col; L = $lay } }
+$script:hot = @{}
+
+$themeDefaults = @('#2563EB', '#F28C28', '#14171C')
+$script:clrAccent = [Drawing.ColorTranslator]::FromHtml($themeDefaults[0])
+$script:clrFinish = [Drawing.ColorTranslator]::FromHtml($themeDefaults[1])
+$script:clrBg = [Drawing.ColorTranslator]::FromHtml($themeDefaults[2])
+try {
+    if (Test-Path $colFile) {
+        $cl = @(Get-Content $colFile | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^#[0-9A-Fa-f]{6}$' })
+        if ($cl.Count -ge 3) {
+            $script:clrAccent = [Drawing.ColorTranslator]::FromHtml($cl[0])
+            $script:clrFinish = [Drawing.ColorTranslator]::FromHtml($cl[1])
+            $script:clrBg = [Drawing.ColorTranslator]::FromHtml($cl[2])
+        }
+    }
+} catch {}
+function Get-Hex($c) { return ('#{0:X2}{1:X2}{2:X2}' -f $c.R, $c.G, $c.B) }
+function Save-Colors {
+    try {
+        if (-not (Test-Path $cfgDir)) { [void](New-Item -ItemType Directory $cfgDir) }
+        Set-Content -Path $colFile -Value @((Get-Hex $script:clrAccent), (Get-Hex $script:clrFinish), (Get-Hex $script:clrBg)) -Encoding ASCII
+    } catch {}
+}
+function Shift-Color($c, [int]$d) {
+    $f = { param($v) [math]::Max(0, [math]::Min(255, $v + $d)) }
+    return [Drawing.Color]::FromArgb((& $f $c.R), (& $f $c.G), (& $f $c.B))
+}
+function Update-Palette {
+    $bg = $script:clrBg
+    $script:isDark = (0.299 * $bg.R + 0.587 * $bg.G + 0.114 * $bg.B) -lt 128
+    $s = $(if ($script:isDark) { 1 } else { -1 })
+    $script:cBg = $bg
+    $script:cPanel = Shift-Color $bg (8 * $s)
+    $script:cCtl = Shift-Color $bg (15 * $s)
+    $script:cHover = Shift-Color $bg (26 * $s)
+    $script:cLine = Shift-Color $bg (34 * $s)
+    $script:cBar = Shift-Color $bg (-6 * $s)
+    if ($script:isDark) {
+        $script:cText = [Drawing.Color]::FromArgb(232, 236, 242); $script:cMuted = [Drawing.Color]::FromArgb(154, 163, 178)
+        $script:cLink = Shift-Color $script:clrAccent 70
+    } else {
+        $script:cText = [Drawing.Color]::FromArgb(28, 30, 34); $script:cMuted = [Drawing.Color]::FromArgb(88, 96, 110)
+        $script:cLink = $script:clrAccent
+    }
+    $a = $script:clrAccent
+    $script:cOnAccent = $(if ((0.299 * $a.R + 0.587 * $a.G + 0.114 * $a.B) -gt 160) { [Drawing.Color]::Black } else { [Drawing.Color]::White })
+}
+Update-Palette
+$script:menuColors = New-Object SebColors
+$script:menuRenderer = New-Object SebRenderer($script:menuColors)
+$script:role = @{}
+$script:lvInit = @{}
+
+# obramowanie paneli / panel borders: cardF = kolor wykończenia, card/box = linia
+function New-RoundPath([single]$x, [single]$y, [single]$w, [single]$h, [single]$rad) {
+    $gp = New-Object Drawing.Drawing2D.GraphicsPath
+    $d = [math]::Min($rad * 2, [math]::Min($w, $h))
+    $gp.AddArc($x, $y, $d, $d, 180, 90)
+    $gp.AddArc(($x + $w - $d), $y, $d, $d, 270, 90)
+    $gp.AddArc(($x + $w - $d), ($y + $h - $d), $d, $d, 0, 90)
+    $gp.AddArc($x, ($y + $h - $d), $d, $d, 90, 90)
+    $gp.CloseFigure()
+    return $gp
+}
+$cardPaint = {
+    param($s, $e)
+    $g = $e.Graphics
+    $rl = $script:role[$s]
+    $col = $(if ($rl -eq 'cardF') { $script:clrFinish } else { $script:cLine })
+    $pb = $(if ($s.Parent) { $s.Parent.BackColor } else { $s.BackColor })
+    $rad = $(if ($rl -eq 'box') { 6 } else { 10 })
+    $g.Clear($pb)
+    $g.SmoothingMode = 'AntiAlias'
+    $gp = New-RoundPath 0 0 ($s.Width - 1) ($s.Height - 1) $rad
+    $br = New-Object Drawing.SolidBrush($s.BackColor); $g.FillPath($br, $gp); $br.Dispose()
+    $p = New-Object Drawing.Pen($col, 1); $g.DrawPath($p, $gp); $p.Dispose(); $gp.Dispose()
+}
+function New-Card([string]$r, [int]$x, [int]$y, [int]$w, [int]$h) {
+    $p = New-Object Windows.Forms.Panel
+    $p.Location = New-Object Drawing.Point($x, $y); $p.Size = New-Object Drawing.Size($w, $h)
+    $script:role[$p] = $r
+    $p.Add_Paint($cardPaint)
+    return $p
+}
+$roundPaint = {
+    param($s, $e)
+    $e.Graphics.SmoothingMode = 'AntiAlias'
+    $p = New-Object Drawing.Pen($script:clrFinish, 2)
+    $e.Graphics.DrawEllipse($p, 1, 1, $s.Width - 3, $s.Height - 3)
+    $p.Dispose()
+}
+function Make-Round($b) { }
+# przyciski rysowane w całości (zaokrąglone, ikony) / fully painted buttons (rounded, icons)
+$btnPaint = {
+    param($s, $e)
+    $g = $e.Graphics
+    $rl = $script:role[$s]
+    $hot = [int]$script:hot[$s]
+    $g.Clear($s.Parent.BackColor)
+    $g.SmoothingMode = 'AntiAlias'
+    $fill = $null; $border = $null; $fore = $script:cText
+    if ($rl -eq 'accent' -or $rl -eq 'round') {
+        $fill = $script:clrAccent; $fore = $script:cOnAccent
+        if ($hot -eq 1) { $fill = Shift-Color $fill 22 } elseif ($hot -eq 2) { $fill = Shift-Color $fill -22 }
+    } elseif ($rl -eq 'flat') {
+        if ($hot -eq 1) { $fill = $script:cHover } elseif ($hot -eq 2) { $fill = $script:cLine }
+    } elseif ($rl -eq 'swatch') {
+        $fill = [Drawing.Color]$s.Tag; $border = $script:cText
+    } else {
+        $fill = $script:cCtl; $border = $script:cLine
+        if ($hot -eq 1) { $fill = $script:cHover } elseif ($hot -eq 2) { $fill = $script:cLine }
+        if ($rl -eq 'secF') { $fore = $script:clrFinish }
+    }
+    if (-not $s.Enabled) { $fore = $script:cMuted; if ($rl -eq 'accent' -or $rl -eq 'round') { $fill = $script:cLine } }
+    if ($rl -eq 'round') {
+        $gp = New-Object Drawing.Drawing2D.GraphicsPath
+        $gp.AddEllipse(1, 1, ($s.Width - 3), ($s.Height - 3))
+    } else { $gp = New-RoundPath 0 0 ($s.Width - 1) ($s.Height - 1) 6 }
+    if ($fill) { $br = New-Object Drawing.SolidBrush($fill); $g.FillPath($br, $gp); $br.Dispose() }
+    if ($rl -eq 'round') { $p = New-Object Drawing.Pen($script:clrFinish, 2); $g.DrawPath($p, $gp); $p.Dispose() }
+    elseif ($border) { $p = New-Object Drawing.Pen($border); $g.DrawPath($p, $gp); $p.Dispose() }
+    $gp.Dispose()
+    $fl = [Windows.Forms.TextFormatFlags]'HorizontalCenter, VerticalCenter, SingleLine, EndEllipsis'
+    $gi = $script:glyph[$s]
+    if ($gi) {
+        $gcol = $(switch ($gi.C) { 'link' { $script:cLink } 'finish' { $script:clrFinish } 'onAccent' { $script:cOnAccent } default { $fore } })
+        if (-not $s.Enabled) { $gcol = $script:cMuted }
+        $gf = New-Object Drawing.Font($script:iconFont, [single]$gi.S, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
+        $gs = [string][char]$gi.G
+        if ($gi.L -eq 'top') {
+            $hh = [int]($s.Height / 2)
+            [Windows.Forms.TextRenderer]::DrawText($g, $gs, $gf, (New-Object Drawing.Rectangle(0, 4, $s.Width, ($hh - 2))), $gcol, $fl)
+            [Windows.Forms.TextRenderer]::DrawText($g, $s.Text, $s.Font, (New-Object Drawing.Rectangle(0, ($hh + 2), $s.Width, ($hh - 6))), $fore, $fl)
+        } else {
+            $nf = [Windows.Forms.TextFormatFlags]'Left, VerticalCenter, SingleLine, NoPadding'
+            $big = New-Object Drawing.Size(1000, 100)
+            $tw = [Windows.Forms.TextRenderer]::MeasureText($g, $s.Text, $s.Font, $big, $nf).Width
+            $gw = [Windows.Forms.TextRenderer]::MeasureText($g, $gs, $gf, $big, $nf).Width
+            $gap = 8
+            $x0 = [int](($s.Width - ($tw + $gap + $gw)) / 2)
+            if ($gi.L -eq 'lead') { $xg = $x0; $xt = $x0 + $gw + $gap } else { $xt = $x0; $xg = $x0 + $tw + $gap }
+            [Windows.Forms.TextRenderer]::DrawText($g, $gs, $gf, (New-Object Drawing.Rectangle($xg, 0, ($gw + 4), $s.Height)), $gcol, $nf)
+            [Windows.Forms.TextRenderer]::DrawText($g, $s.Text, $s.Font, (New-Object Drawing.Rectangle($xt, 0, ($tw + 4), $s.Height)), $fore, $nf)
+        }
+        $gf.Dispose()
+    } else {
+        [Windows.Forms.TextRenderer]::DrawText($g, $s.Text, $s.Font, $s.ClientRectangle, $fore, $fl)
+    }
+}
+$lvHeaderPaint = {
+    param($s, $e)
+    $g = $e.Graphics
+    $br = New-Object Drawing.SolidBrush($script:cBar)
+    $g.FillRectangle($br, $e.Bounds); $br.Dispose()
+    $p = New-Object Drawing.Pen($script:cLine)
+    $g.DrawLine($p, $e.Bounds.Right - 1, $e.Bounds.Top + 4, $e.Bounds.Right - 1, $e.Bounds.Bottom - 5)
+    $g.DrawLine($p, $e.Bounds.Left, $e.Bounds.Bottom - 1, $e.Bounds.Right, $e.Bounds.Bottom - 1)
+    $p.Dispose()
+    $r = New-Object Drawing.Rectangle(($e.Bounds.X + 6), $e.Bounds.Y, ($e.Bounds.Width - 8), $e.Bounds.Height)
+    [Windows.Forms.TextRenderer]::DrawText($g, $e.Header.Text, $s.Font, $r, $script:cMuted, [Windows.Forms.TextFormatFlags]'VerticalCenter, Left, EndEllipsis')
+}
+function Fit-LastColumn($l) { if ($l.Columns.Count -gt 0) { $l.Columns[$l.Columns.Count - 1].Width = -2 } }
+$tabPaint = {
+    param($s, $e)
+    $sel = ($e.Index -eq $s.SelectedIndex)
+    $br = New-Object Drawing.SolidBrush($(if ($sel) { $script:cBg } else { $script:cBar }))
+    $e.Graphics.FillRectangle($br, $e.Bounds); $br.Dispose()
+    if ($sel) {
+        $p = New-Object Drawing.Pen($script:clrFinish, 2)
+        $e.Graphics.DrawLine($p, $e.Bounds.Left, $e.Bounds.Bottom - 1, $e.Bounds.Right, $e.Bounds.Bottom - 1)
+        $p.Dispose()
+    }
+    [Windows.Forms.TextRenderer]::DrawText($e.Graphics, $s.TabPages[$e.Index].Text, $s.Font, $e.Bounds, $(if ($sel) { $script:cText } else { $script:cMuted }), [Windows.Forms.TextFormatFlags]'HorizontalCenter, VerticalCenter')
+}
+
+function Apply-Theme($c) {
+    $r = $script:role[$c]
+    if ($c -is [Windows.Forms.Form]) {
+        $c.BackColor = $script:cBg; $c.ForeColor = $script:cText
+        try { [SebTheme]::Window($c.Handle, $script:isDark, $script:cBar, $script:clrFinish, $script:cText) } catch {}
+    }
+    elseif ($c -is [Windows.Forms.Button]) {
+        $c.FlatStyle = 'Flat'; $c.UseVisualStyleBackColor = $false; $c.Cursor = 'Hand'
+        $fa = $c.FlatAppearance
+        switch ($r) {
+            { $_ -in 'accent', 'round' } {
+                $c.BackColor = $script:clrAccent; $c.ForeColor = $script:cOnAccent
+                $fa.BorderColor = $script:clrAccent; $fa.MouseOverBackColor = (Shift-Color $script:clrAccent 22); $fa.MouseDownBackColor = (Shift-Color $script:clrAccent -22)
+                $fa.BorderSize = $(if ($r -eq 'round') { 0 } else { 1 })
+            }
+            'round2' {
+                $c.BackColor = $script:cCtl; $c.ForeColor = $script:cText
+                $fa.BorderSize = 0; $fa.MouseOverBackColor = $script:cHover; $fa.MouseDownBackColor = $script:cLine
+            }
+            'flat' {
+                $c.BackColor = $c.Parent.BackColor; $c.ForeColor = $script:cText
+                $fa.BorderSize = 0; $fa.MouseOverBackColor = $script:cHover; $fa.MouseDownBackColor = $script:cLine
+            }
+            'swatch' {
+                $c.BackColor = [Drawing.Color]$c.Tag
+                $fa.BorderSize = 1; $fa.BorderColor = $script:cText; $fa.MouseOverBackColor = $c.BackColor; $fa.MouseDownBackColor = $c.BackColor
+            }
+            default {
+                $c.BackColor = $script:cCtl; $c.ForeColor = $(if ($r -eq 'secF') { $script:clrFinish } else { $script:cText })
+                $fa.BorderSize = 1; $fa.BorderColor = $script:cLine; $fa.MouseOverBackColor = $script:cHover; $fa.MouseDownBackColor = $script:cLine
+            }
+        }
+        $fa.BorderSize = 0
+        if (-not $script:lvInit.ContainsKey($c)) {
+            $script:lvInit[$c] = $true
+            $c.Add_Paint($btnPaint)
+            $c.Add_MouseEnter({ param($s, $e) $script:hot[$s] = 1; $s.Invalidate() })
+            $c.Add_MouseLeave({ param($s, $e) $script:hot[$s] = 0; $s.Invalidate() })
+            $c.Add_MouseDown({ param($s, $e) $script:hot[$s] = 2; $s.Invalidate() })
+            $c.Add_MouseUp({ param($s, $e) $script:hot[$s] = $(if ($s.ClientRectangle.Contains($e.Location)) { 1 } else { 0 }); $s.Invalidate() })
+        }
+    }
+    elseif ($c -is [SebSlider]) {
+        $c.BackColor = $c.Parent.BackColor
+        $c.TrackColor = $script:cLine; $c.FillColor = $script:clrFinish; $c.ThumbColor = $script:clrFinish
+    }
+    elseif ($c -is [Windows.Forms.TextBox]) {
+        $c.BackColor = $script:cCtl; $c.ForeColor = $script:cText
+        if ($r -eq 'plain') { $c.BorderStyle = 'None'; $c.BackColor = $c.Parent.BackColor }
+        elseif ($script:role[$c.Parent] -eq 'box') { $c.BorderStyle = 'None' } else { $c.BorderStyle = 'FixedSingle' }
+    }
+    elseif ($c -is [Windows.Forms.ComboBox]) {
+        $c.FlatStyle = 'Flat'; $c.BackColor = $script:cCtl; $c.ForeColor = $script:cText
+    }
+    elseif ($c -is [Windows.Forms.ListView]) {
+        $c.BackColor = $script:cPanel; $c.ForeColor = $script:cText; $c.GridLines = $false
+        if ($script:role[$c.Parent] -eq 'box') { $c.BorderStyle = 'None' } else { $c.BorderStyle = 'FixedSingle' }
+        if (-not $script:lvInit.ContainsKey($c)) {
+            $script:lvInit[$c] = $true
+            $c.OwnerDraw = $true
+            $c.Add_DrawColumnHeader($lvHeaderPaint)
+            $c.Add_DrawItem({ param($s, $e) $e.DrawDefault = $true })
+            $c.Add_DrawSubItem({ param($s, $e) $e.DrawDefault = $true })
+            $c.Add_ClientSizeChanged({ param($s, $e) Fit-LastColumn $s })
+        }
+        try { [SebTheme]::Scroll($c.Handle, $script:isDark) } catch {}
+        Fit-LastColumn $c
+    }
+    elseif ($c -is [Windows.Forms.TabControl]) {
+        if (-not $script:lvInit.ContainsKey($c)) {
+            $script:lvInit[$c] = $true
+            $c.DrawMode = 'OwnerDrawFixed'; $c.SizeMode = 'Fixed'
+            $c.ItemSize = New-Object Drawing.Size(([int](($c.Width - 6) / $c.TabPages.Count)), 28)
+            $c.Add_DrawItem($tabPaint)
+        }
+    }
+    elseif ($c -is [Windows.Forms.TabPage]) {
+        $c.UseVisualStyleBackColor = $false; $c.BackColor = $script:cBg; $c.ForeColor = $script:cText
+    }
+    elseif ($c -is [Windows.Forms.TrackBar]) {
+        $c.BackColor = $c.Parent.BackColor
+    }
+    elseif ($c -is [Windows.Forms.LinkLabel]) {
+        $c.LinkColor = $script:cLink; $c.ActiveLinkColor = $script:cLink; $c.VisitedLinkColor = $script:cLink
+    }
+    elseif ($c -is [Windows.Forms.Label]) {
+        $c.ForeColor = $(switch ($r) { 'muted' { $script:cMuted } 'finish' { $script:clrFinish } default { $script:cText } })
+    }
+    elseif ($c -is [Windows.Forms.CheckBox] -or $c -is [Windows.Forms.GroupBox]) {
+        $c.ForeColor = $script:cText
+    }
+    elseif ($c -is [Windows.Forms.Panel]) {
+        $c.BackColor = $(switch ($r) { 'card' { $script:cPanel } 'cardF' { $script:cPanel } 'box' { $script:cCtl } 'sepF' { $script:clrFinish } 'sepL' { $script:cLine } 'bar' { $script:cBar } default { $c.Parent.BackColor } })
+    }
+    foreach ($ch in $c.Controls) { Apply-Theme $ch }
+    $c.Invalidate()
+}
+
 # ---------- okno ----------
 $form = New-Object Windows.Forms.Form
 $form.Text = 'SebRadio'
-$form.ClientSize = New-Object Drawing.Size(520, 666)
+$form.ClientSize = New-Object Drawing.Size(540, 612)
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
 $form.Font = New-Object Drawing.Font('Segoe UI', 9)
+$tipMain = New-Object Windows.Forms.ToolTip
+$tipMain.AutoPopDelay = 20000
 
+# link, wklej, zapisz, moje stacje / link, paste, save, my stations
 $lblUrl = New-Object Windows.Forms.Label
 $lblUrl.Text = $T.LinkLabel
-$lblUrl.Location = New-Object Drawing.Point(10, 10); $lblUrl.AutoSize = $true
+$lblUrl.Location = New-Object Drawing.Point(20, 14); $lblUrl.AutoSize = $true
+$script:role[$lblUrl] = 'muted'
 
+$boxUrl = New-Card 'box' 20 36 290 40
 $txtUrl = New-Object Windows.Forms.TextBox
-$txtUrl.Location = New-Object Drawing.Point(10, 30); $txtUrl.Width = 410
+$txtUrl.BorderStyle = 'None'; $txtUrl.Font = New-Object Drawing.Font('Segoe UI', 10)
+$txtUrl.Location = New-Object Drawing.Point(10, 11); $txtUrl.Width = 272
+$boxUrl.Controls.Add($txtUrl)
 
 $btnPaste = New-Object Windows.Forms.Button
-$btnPaste.Text = $T.PastePlay; $btnPaste.Location = New-Object Drawing.Point(425, 29); $btnPaste.Width = 85
-
-$lblSt = New-Object Windows.Forms.Label
-$lblSt.Text = $T.Stations; $lblSt.Location = New-Object Drawing.Point(10, 66); $lblSt.AutoSize = $true
-
-$cmbSt = New-Object Windows.Forms.ComboBox
-$cmbSt.DropDownStyle = 'DropDownList'; $cmbSt.Location = New-Object Drawing.Point(95, 62); $cmbSt.Width = 235; $cmbSt.MaxDropDownItems = 20
+$btnPaste.Text = [string][char]0xE77F; $btnPaste.Font = New-Object Drawing.Font($script:iconFont, 13)
+$btnPaste.Location = New-Object Drawing.Point(316, 36); $btnPaste.Size = New-Object Drawing.Size(44, 40)
+$tipMain.SetToolTip($btnPaste, ($T.PastePlay -replace '&&', '&'))
 
 $btnSave = New-Object Windows.Forms.Button
-$btnSave.Text = $T.Save; $btnSave.Location = New-Object Drawing.Point(335, 61); $btnSave.Width = 85
+$btnSave.Text = [string][char]0xE734; $btnSave.Font = New-Object Drawing.Font($script:iconFont, 13)
+$btnSave.Location = New-Object Drawing.Point(366, 36); $btnSave.Size = New-Object Drawing.Size(44, 40)
+$script:role[$btnSave] = 'secF'
+$tipMain.SetToolTip($btnSave, $T.SaveTitle)
 
+$btnStations = New-Object Windows.Forms.Button
+$btnStations.Text = $T.TabMine + '  ' + [char]0x25BE; $btnStations.Font = New-Object Drawing.Font('Segoe UI', 9.5)
+$btnStations.Location = New-Object Drawing.Point(416, 36); $btnStations.Size = New-Object Drawing.Size(104, 40)
+$stMenu = New-Object Windows.Forms.ContextMenuStrip
+
+# ukryte, używane przez logikę programu / hidden, used by the program logic
+$lblSt = New-Object Windows.Forms.Label
+$cmbSt = New-Object Windows.Forms.ComboBox
+$cmbSt.DropDownStyle = 'DropDownList'
 $btnManage = New-Object Windows.Forms.Button
-$btnManage.Text = $T.Manage; $btnManage.Location = New-Object Drawing.Point(425, 61); $btnManage.Width = 85
 
+# karta "teraz gra" / now playing card
+$pnlNow = New-Card 'cardF' 20 92 500 128
+$lblNowTag = New-Object Windows.Forms.Label
+$lblNowTag.Location = New-Object Drawing.Point(18, 14); $lblNowTag.Size = New-Object Drawing.Size(464, 18)
+$lblNowTag.Font = New-Object Drawing.Font('Segoe UI Semibold', 8.5); $lblNowTag.AutoEllipsis = $true
+$script:role[$lblNowTag] = 'finish'
+$lblStation = New-Object Windows.Forms.Label
+$lblStation.Location = New-Object Drawing.Point(15, 33); $lblStation.Size = New-Object Drawing.Size(470, 36)
+$lblStation.Font = New-Object Drawing.Font('Segoe UI Semibold', 16); $lblStation.AutoEllipsis = $true; $lblStation.Text = 'SebRadio'
+$lblSong = New-Object Windows.Forms.Label
+$lblSong.Location = New-Object Drawing.Point(18, 70); $lblSong.Size = New-Object Drawing.Size(464, 22)
+$lblSong.Font = New-Object Drawing.Font('Segoe UI', 11); $lblSong.AutoEllipsis = $true
+$flowMeta = New-Object Windows.Forms.FlowLayoutPanel
+$flowMeta.Location = New-Object Drawing.Point(18, 96); $flowMeta.Size = New-Object Drawing.Size(470, 26)
+$flowMeta.WrapContents = $false
+$pnlNow.Controls.AddRange(@($lblNowTag, $lblStation, $lblSong, $flowMeta))
+$chipPaint = {
+    param($s, $e)
+    $g = $e.Graphics
+    $g.Clear($s.Parent.BackColor)
+    $g.SmoothingMode = 'AntiAlias'
+    $h = $s.Height - 1; $w = $s.Width - 1
+    $gp = New-Object Drawing.Drawing2D.GraphicsPath
+    $gp.AddArc(0, 0, $h, $h, 90, 180)
+    $gp.AddArc(($w - $h), 0, $h, $h, 270, 180)
+    $gp.CloseFigure()
+    $br = New-Object Drawing.SolidBrush($script:cCtl); $g.FillPath($br, $gp); $br.Dispose()
+    $p = New-Object Drawing.Pen($script:cLine); $g.DrawPath($p, $gp); $p.Dispose(); $gp.Dispose()
+    [Windows.Forms.TextRenderer]::DrawText($g, $s.Text, $s.Font, $s.ClientRectangle, $script:cMuted, [Windows.Forms.TextFormatFlags]'HorizontalCenter, VerticalCenter')
+}
+$cardMenu = New-Object Windows.Forms.ContextMenuStrip
+$miCopySong = $cardMenu.Items.Add($T.CopySong)
+$miCopyStream = $cardMenu.Items.Add($T.CopyStream)
+$miCopyDet = $cardMenu.Items.Add($T.CopyDetails)
+foreach ($c in $pnlNow, $lblNowTag, $lblStation, $lblSong, $flowMeta) { $c.ContextMenuStrip = $cardMenu }
+
+# graj/stop i głośność / play/stop and volume
 $btnPlay = New-Object Windows.Forms.Button
-$btnPlay.Text = $T.Play; $btnPlay.Location = New-Object Drawing.Point(10, 96); $btnPlay.Width = 80
-
+$btnPlay.Text = [string][char]0x25B6; $btnPlay.Font = New-Object Drawing.Font('Segoe UI Symbol', 18)
+$btnPlay.Location = New-Object Drawing.Point(20, 236); $btnPlay.Size = New-Object Drawing.Size(64, 64)
+$script:role[$btnPlay] = 'round'; Make-Round $btnPlay
+$tipMain.SetToolTip($btnPlay, $T.Play)
 $btnStop = New-Object Windows.Forms.Button
-$btnStop.Text = $T.Stop; $btnStop.Location = New-Object Drawing.Point(95, 96); $btnStop.Width = 80
 
 $lblVol = New-Object Windows.Forms.Label
-$lblVol.Text = $T.Volume; $lblVol.Location = New-Object Drawing.Point(200, 101); $lblVol.AutoSize = $true
+$lblVol.Text = [string][char]0xE767; $lblVol.Font = New-Object Drawing.Font($script:iconFont, 15)
+$lblVol.Location = New-Object Drawing.Point(100, 254); $lblVol.Size = New-Object Drawing.Size(30, 30); $lblVol.TextAlign = 'MiddleCenter'
+$tipMain.SetToolTip($lblVol, ($T.Volume -replace ':$', ''))
 
-$trkVol = New-Object Windows.Forms.TrackBar
-$trkVol.Location = New-Object Drawing.Point(265, 92); $trkVol.Width = 200
-$trkVol.Minimum = 0; $trkVol.Maximum = 100; $trkVol.TickFrequency = 10; $trkVol.Value = 50
+$trkVol = New-Object SebSlider
+$trkVol.Location = New-Object Drawing.Point(138, 256); $trkVol.Size = New-Object Drawing.Size(322, 26)
+$trkVol.Minimum = 0; $trkVol.Maximum = 100; $trkVol.Value = 50
 
 $lblVolVal = New-Object Windows.Forms.Label
-$lblVolVal.Text = '50%'; $lblVolVal.Location = New-Object Drawing.Point(470, 101); $lblVolVal.AutoSize = $true
+$lblVolVal.Text = '50%'; $lblVolVal.Location = New-Object Drawing.Point(464, 259); $lblVolVal.Size = New-Object Drawing.Size(56, 20); $lblVolVal.TextAlign = 'MiddleRight'
+$script:role[$lblVolVal] = 'muted'
 
+# dane strumienia (niewidoczne, pokazywane w karcie) / stream data (hidden, shown in the card)
 $lv = New-Object Windows.Forms.ListView
-$lv.Location = New-Object Drawing.Point(10, 139); $lv.Size = New-Object Drawing.Size(500, 278)
-$lv.View = 'Details'; $lv.FullRowSelect = $true; $lv.GridLines = $true
-$lv.HeaderStyle = 'Nonclickable'
+$lv.View = 'Details'
 [void]$lv.Columns.Add($T.ColInfo, 130)
 [void]$lv.Columns.Add($T.ColValue, 345)
 foreach ($f in $fields) {
@@ -1165,62 +1636,167 @@ foreach ($f in $fields) {
     [void]$it.SubItems.Add('-')
     [void]$lv.Items.Add($it)
 }
-
 $lblEngine = New-Object Windows.Forms.Label
 $v = [SebBass]::BASS_GetVersion()
 $lblEngine.Text = $T.Engine + ': BASS {0}.{1}.{2}.{3}' -f (($v -shr 24) -band 255), (($v -shr 16) -band 255), (($v -shr 8) -band 255), ($v -band 255)
 if ($plugins.Count) { $lblEngine.Text += '  +  ' + ($plugins -join ', ') }
-$lblEngine.Location = New-Object Drawing.Point(10, 646); $lblEngine.AutoSize = $true
-$lblEngine.ForeColor = [Drawing.Color]::Gray
 
 # ---------- panel rozpoznawania ----------
-$grpRec = New-Object Windows.Forms.GroupBox
-$grpRec.Text = $T.RecGroup
-$grpRec.Location = New-Object Drawing.Point(10, 426); $grpRec.Size = New-Object Drawing.Size(500, 180)
+$grpRec = New-Card 'card' 20 318 500 204
+$lblRecHead = New-Object Windows.Forms.Label
+$lblRecHead.Text = $T.RecHead; $lblRecHead.Location = New-Object Drawing.Point(18, 14); $lblRecHead.AutoSize = $true
+$lblRecHead.Font = New-Object Drawing.Font('Segoe UI', 9.5)
+$script:role[$lblRecHead] = 'muted'
+$lblRec = New-Object Windows.Forms.Label
+$lblRec.Text = $T.RecHint; $lblRec.Location = New-Object Drawing.Point(18, 36); $lblRec.Size = New-Object Drawing.Size(300, 18)
+$lblRec.AutoEllipsis = $true; $lblRec.Font = New-Object Drawing.Font('Segoe UI', 8.5)
+$script:role[$lblRec] = 'muted'
 
 $btnShazam = New-Object Windows.Forms.Button
-$btnShazam.Text = $T.Recognize; $btnShazam.Location = New-Object Drawing.Point(10, 24); $btnShazam.Size = New-Object Drawing.Size(130, 28)
+$btnShazam.Text = $T.Recognize; $btnShazam.Location = New-Object Drawing.Point(326, 14); $btnShazam.Size = New-Object Drawing.Size(156, 40)
+$btnShazam.Font = New-Object Drawing.Font('Segoe UI Semibold', 9.5)
+$btnShazam.TextImageRelation = 'ImageBeforeText'
+$script:role[$btnShazam] = 'accent'
 
-$lblRec = New-Object Windows.Forms.Label
-$lblRec.Text = $T.RecHint; $lblRec.Location = New-Object Drawing.Point(150, 30); $lblRec.Size = New-Object Drawing.Size(340, 20)
-$lblRec.ForeColor = [Drawing.Color]::DimGray
+$recSep = New-Object Windows.Forms.Panel
+$recSep.Location = New-Object Drawing.Point(18, 66); $recSep.Size = New-Object Drawing.Size(464, 1)
+$script:role[$recSep] = 'sepL'
 
 $lblArtist = New-Object Windows.Forms.Label
-$lblArtist.Text = $T.Artist; $lblArtist.Location = New-Object Drawing.Point(10, 68); $lblArtist.AutoSize = $true
+$lblArtist.Text = $T.Artist -replace ':$', ''; $lblArtist.Location = New-Object Drawing.Point(18, 84); $lblArtist.AutoSize = $true
+$script:role[$lblArtist] = 'muted'
 $txtArtist = New-Object Windows.Forms.TextBox
-$txtArtist.Location = New-Object Drawing.Point(85, 65); $txtArtist.Width = 300; $txtArtist.ReadOnly = $true
+$txtArtist.Location = New-Object Drawing.Point(110, 82); $txtArtist.Width = 324; $txtArtist.ReadOnly = $true
+$txtArtist.Font = New-Object Drawing.Font('Segoe UI', 11)
+$script:role[$txtArtist] = 'plain'
 $btnCopyArtist = New-Object Windows.Forms.Button
-$btnCopyArtist.Text = $T.Copy; $btnCopyArtist.Location = New-Object Drawing.Point(395, 63); $btnCopyArtist.Width = 95; $btnCopyArtist.Enabled = $false
+$btnCopyArtist.Text = [string][char]0xE8C8; $btnCopyArtist.Font = New-Object Drawing.Font($script:iconFont, 11)
+$btnCopyArtist.Location = New-Object Drawing.Point(444, 76); $btnCopyArtist.Size = New-Object Drawing.Size(38, 34); $btnCopyArtist.Enabled = $false
+$script:role[$btnCopyArtist] = 'flat'
+$tipMain.SetToolTip($btnCopyArtist, $T.Copy)
 
 $lblTitle = New-Object Windows.Forms.Label
-$lblTitle.Text = $T.Title; $lblTitle.Location = New-Object Drawing.Point(10, 101); $lblTitle.AutoSize = $true
+$lblTitle.Text = $T.Title -replace ':$', ''; $lblTitle.Location = New-Object Drawing.Point(18, 122); $lblTitle.AutoSize = $true
+$script:role[$lblTitle] = 'muted'
 $txtTitle = New-Object Windows.Forms.TextBox
-$txtTitle.Location = New-Object Drawing.Point(85, 98); $txtTitle.Width = 300; $txtTitle.ReadOnly = $true
+$txtTitle.Location = New-Object Drawing.Point(110, 120); $txtTitle.Width = 324; $txtTitle.ReadOnly = $true
+$txtTitle.Font = New-Object Drawing.Font('Segoe UI', 11)
+$script:role[$txtTitle] = 'plain'
 $btnCopyTitle = New-Object Windows.Forms.Button
-$btnCopyTitle.Text = $T.Copy; $btnCopyTitle.Location = New-Object Drawing.Point(395, 96); $btnCopyTitle.Width = 95; $btnCopyTitle.Enabled = $false
+$btnCopyTitle.Text = [string][char]0xE8C8; $btnCopyTitle.Font = New-Object Drawing.Font($script:iconFont, 11)
+$btnCopyTitle.Location = New-Object Drawing.Point(444, 114); $btnCopyTitle.Size = New-Object Drawing.Size(38, 34); $btnCopyTitle.Enabled = $false
+$script:role[$btnCopyTitle] = 'flat'
+$tipMain.SetToolTip($btnCopyTitle, $T.Copy)
 
 $btnCopyAll = New-Object Windows.Forms.Button
-$btnCopyAll.Text = $T.CopyAll; $btnCopyAll.Location = New-Object Drawing.Point(85, 136); $btnCopyAll.Size = New-Object Drawing.Size(180, 28); $btnCopyAll.Enabled = $false
 $btnYouTube = New-Object Windows.Forms.Button
-$btnYouTube.Text = 'YouTube'; $btnYouTube.Location = New-Object Drawing.Point(275, 136); $btnYouTube.Size = New-Object Drawing.Size(100, 28); $btnYouTube.Enabled = $false
+$btnYouTube.Text = 'YouTube'; $btnYouTube.Location = New-Object Drawing.Point(18, 154); $btnYouTube.Size = New-Object Drawing.Size(228, 36); $btnYouTube.Enabled = $false
 $btnApple = New-Object Windows.Forms.Button
-$btnApple.Text = 'Apple Music'; $btnApple.Location = New-Object Drawing.Point(385, 136); $btnApple.Size = New-Object Drawing.Size(105, 28); $btnApple.Enabled = $false
+$btnApple.Text = 'Apple Music'; $btnApple.Location = New-Object Drawing.Point(254, 154); $btnApple.Size = New-Object Drawing.Size(228, 36); $btnApple.Enabled = $false
+foreach ($b in $btnYouTube, $btnApple) {
+    $b.Font = New-Object Drawing.Font('Segoe UI', 10); $b.TextImageRelation = 'TextBeforeImage'
+    Set-Glyph $b 0xE8A7 15 'text' 'trail'
+}
+Set-Glyph $btnShazam 0xE8D6 16 'onAccent' 'lead'
 
-$grpRec.Controls.AddRange(@($btnShazam, $lblRec, $lblArtist, $txtArtist, $btnCopyArtist, $lblTitle, $txtTitle, $btnCopyTitle, $btnCopyAll, $btnYouTube, $btnApple))
+$grpRec.Controls.AddRange(@($lblRecHead, $lblRec, $btnShazam, $recSep, $lblArtist, $txtArtist, $btnCopyArtist, $lblTitle, $txtTitle, $btnCopyTitle, $btnYouTube, $btnApple))
 
 function Copy-Text([string]$t) {
     if ($t) { [Windows.Forms.Clipboard]::SetText($t); $lblRec.Text = $T.Copied + $t }
 }
 
-$btnMini = New-Object Windows.Forms.Button
-$btnMini.Text = $T.Mini; $btnMini.Location = New-Object Drawing.Point(10, 612); $btnMini.Size = New-Object Drawing.Size(110, 26)
-$btnSleep = New-Object Windows.Forms.Button
-$btnSleep.Text = $T.Sleep; $btnSleep.Location = New-Object Drawing.Point(126, 612); $btnSleep.Size = New-Object Drawing.Size(150, 26)
-$btnHist = New-Object Windows.Forms.Button
-$btnHist.Text = $T.History; $btnHist.Location = New-Object Drawing.Point(282, 612); $btnHist.Size = New-Object Drawing.Size(110, 26)
-$btnSettings = New-Object Windows.Forms.Button
-$btnSettings.Text = $T.Settings; $btnSettings.Location = New-Object Drawing.Point(398, 612); $btnSettings.Size = New-Object Drawing.Size(112, 26)
+# dolny pasek z ikonami / bottom icon bar
+$sepBar = New-Object Windows.Forms.Panel
+$sepBar.Location = New-Object Drawing.Point(0, 540); $sepBar.Size = New-Object Drawing.Size(540, 2)
+$script:role[$sepBar] = 'sepF'
+$pnlBar = New-Object Windows.Forms.Panel
+$pnlBar.Location = New-Object Drawing.Point(0, 542); $pnlBar.Size = New-Object Drawing.Size(540, 70)
+$script:role[$pnlBar] = 'bar'
+
+$btnMini = New-Object Windows.Forms.Button; $btnMini.Text = $T.MiniShort
+$btnBarSt = New-Object Windows.Forms.Button; $btnBarSt.Text = $T.StationsMenu
+$btnBarSearch = New-Object Windows.Forms.Button; $btnBarSearch.Text = ($T.Search)
+$btnHist = New-Object Windows.Forms.Button; $btnHist.Text = ($T.History -replace '\.+$', '')
+$btnSleep = New-Object Windows.Forms.Button; $btnSleep.Text = $T.SleepShort
+$btnSettings = New-Object Windows.Forms.Button; $btnSettings.Text = ($T.Settings -replace '\.+$', '')
+$barBtns = @($btnMini, $btnBarSt, $btnBarSearch, $btnHist, $btnSleep, $btnSettings)
+$barGlyphs = @(0xE8A7, 0xE8FD, 0xE721, 0xE81C, 0xE708, 0xE713)
+for ($i = 0; $i -lt 6; $i++) {
+    $b = $barBtns[$i]
+    $b.Location = New-Object Drawing.Point((12 + 86 * $i), 6); $b.Size = New-Object Drawing.Size(86, 58)
+    $b.Font = New-Object Drawing.Font('Segoe UI', 8.5)
+    $b.TextImageRelation = 'ImageAboveText'; $b.ImageAlign = 'BottomCenter'; $b.TextAlign = 'TopCenter'
+    $script:role[$b] = 'flat'
+    Set-Glyph $b $barGlyphs[$i] 20 'link' 'top'
+}
+$tipMain.SetToolTip($btnMini, $T.Mini)
+$tipMain.SetToolTip($btnSleep, $T.Sleep)
+$pnlBar.Controls.AddRange($barBtns)
 $sleepMenu = New-Object Windows.Forms.ContextMenuStrip
+
+function Get-InfoText([string]$n) {
+    $t = $lv.Items[$n].SubItems[1].Text
+    if ($t -eq '-') { return '' }
+    return $t
+}
+function Get-AllInfo {
+    $lines = @()
+    foreach ($f in $fields) { $x = Get-InfoText $f; if ($x) { $lines += ($F[$f] + ': ' + $x) } }
+    return ($lines -join "`r`n")
+}
+function Update-NowCard {
+    if (-not $lblStation) { return }
+    $playing = Test-Playing
+    $name = ''
+    if ($playing) {
+        $i = Find-StationIndex $script:curUrl
+        if ($i -ge 0) { $name = [string]$script:stations[$i].Name }
+        if (-not $name) { $name = $script:stationName }
+        if (-not $name -and $script:streamUrl -match '^https?://') { $name = ([Uri]$script:streamUrl).Host }
+    }
+    if (-not $name) { $name = 'SebRadio' }
+    $song = $(if ($playing) { Get-InfoText 'Teraz gra' } else { '' })
+    $meta = @(@((Get-InfoText 'Format'), (Get-InfoText 'Bitrate'), (Get-InfoText 'Częstotliwość'), (Get-InfoText 'Kanały')) | Where-Object { $_ })
+    $st = Get-InfoText 'Czas startu'
+    if ($st) { $meta += ($T.f_Start + ' ' + $st) }
+    $status = Get-InfoText 'Status'
+    if ($status -eq $T.Playing) { $status = $T.NowTag }
+    $tag = [string][char]0x25CF + '  ' + $status.ToUpper()
+    $mt = $meta -join '|'
+    if ($lblNowTag.Text -ne $tag) { $lblNowTag.Text = $tag }
+    if ($lblStation.Text -ne $name) { $lblStation.Text = $name }
+    if ($lblSong.Text -ne $song) { $lblSong.Text = $song }
+    if ($script:metaText -ne $mt) {
+        $script:metaText = $mt
+        $flowMeta.SuspendLayout()
+        foreach ($old in @($flowMeta.Controls)) { $old.Dispose() }
+        foreach ($m in $meta) {
+            $l = New-Object Windows.Forms.Label
+            $l.AutoSize = $true; $l.Text = $m
+            $l.Font = New-Object Drawing.Font('Segoe UI', 8.5)
+            $l.Padding = New-Object Windows.Forms.Padding(9, 3, 9, 3)
+            $l.Margin = New-Object Windows.Forms.Padding(0, 0, 6, 0)
+            $l.ContextMenuStrip = $cardMenu
+            $l.Add_Paint($chipPaint)
+            $flowMeta.Controls.Add($l)
+        }
+        $flowMeta.ResumeLayout()
+    }
+    $det = @()
+    foreach ($f in $fields) {
+        if ($f -in 'Status', 'Czas słuchania') { continue }
+        $x = Get-InfoText $f; if ($x) { $det += ($F[$f] + ': ' + $x) }
+    }
+    $det += $lblEngine.Text
+    $dt = $det -join "`r`n"
+    if ($script:detText -ne $dt) {
+        $script:detText = $dt
+        foreach ($c in $pnlNow, $lblStation, $lblSong) { $tipMain.SetToolTip($c, $dt) }
+    }
+}
+$miCopySong.Add_Click({ $x = Get-InfoText 'Teraz gra'; if ($x -and -not $x.StartsWith('(')) { [Windows.Forms.Clipboard]::SetText($x) } })
+$miCopyStream.Add_Click({ $x = Get-InfoText 'Adres strumienia'; if ($x) { [Windows.Forms.Clipboard]::SetText($x) } })
+$miCopyDet.Add_Click({ $x = Get-AllInfo; if ($x) { [Windows.Forms.Clipboard]::SetText($x) } })
 
 # ---------- ikona w zasobniku / tray icon ----------
 $appIcon = $null
@@ -1248,26 +1824,27 @@ $tray.ContextMenuStrip = $trayMenu
 # ---------- mini odtwarzacz / mini player ----------
 $mini = New-Object Windows.Forms.Form
 $mini.FormBorderStyle = 'None'; $mini.TopMost = $true; $mini.ShowInTaskbar = $false
-$mini.StartPosition = 'Manual'; $mini.ClientSize = New-Object Drawing.Size(300, 40)
-$mini.BackColor = [Drawing.Color]::FromArgb(27, 30, 34)
+$mini.StartPosition = 'Manual'; $mini.ClientSize = New-Object Drawing.Size(340, 52)
 if ($appIcon) { $mini.Icon = $appIcon }
+$script:role[$mini] = 'cardF'
+$mini.Add_Paint($cardPaint)
 $mBtn = New-Object Windows.Forms.Button
-$mBtn.FlatStyle = 'Flat'; $mBtn.FlatAppearance.BorderSize = 0
-$mBtn.Font = New-Object Drawing.Font('Segoe UI Symbol', 12)
-$mBtn.ForeColor = [Drawing.Color]::FromArgb(57, 217, 138)
-$mBtn.Location = New-Object Drawing.Point(4, 4); $mBtn.Size = New-Object Drawing.Size(34, 32)
+$mBtn.Font = New-Object Drawing.Font('Segoe UI Symbol', 11)
+$mBtn.Location = New-Object Drawing.Point(8, 8); $mBtn.Size = New-Object Drawing.Size(36, 36)
+$script:role[$mBtn] = 'round'; Make-Round $mBtn
 $mName = New-Object Windows.Forms.Label
-$mName.ForeColor = [Drawing.Color]::White; $mName.Font = New-Object Drawing.Font('Segoe UI', 9.5)
+$mName.Font = New-Object Drawing.Font('Segoe UI Semibold', 10)
 $mName.AutoEllipsis = $true; $mName.TextAlign = 'MiddleLeft'
-$mName.Location = New-Object Drawing.Point(42, 4); $mName.Size = New-Object Drawing.Size(196, 32)
+$mName.Location = New-Object Drawing.Point(52, 6); $mName.Size = New-Object Drawing.Size(218, 40)
 $mFull = New-Object Windows.Forms.Button
-$mFull.FlatStyle = 'Flat'; $mFull.FlatAppearance.BorderSize = 0; $mFull.Text = [char]0x2922
-$mFull.Font = New-Object Drawing.Font('Segoe UI Symbol', 10); $mFull.ForeColor = [Drawing.Color]::Silver
-$mFull.Location = New-Object Drawing.Point(240, 6); $mFull.Size = New-Object Drawing.Size(28, 28)
+$mFull.Text = [char]0x2922
+$mFull.Font = New-Object Drawing.Font('Segoe UI Symbol', 10)
+$mFull.Location = New-Object Drawing.Point(274, 12); $mFull.Size = New-Object Drawing.Size(28, 28)
 $mClose = New-Object Windows.Forms.Button
-$mClose.FlatStyle = 'Flat'; $mClose.FlatAppearance.BorderSize = 0; $mClose.Text = [char]0x2715
-$mClose.Font = New-Object Drawing.Font('Segoe UI Symbol', 9); $mClose.ForeColor = [Drawing.Color]::Silver
-$mClose.Location = New-Object Drawing.Point(268, 6); $mClose.Size = New-Object Drawing.Size(28, 28)
+$mClose.Text = [char]0x2715
+$mClose.Font = New-Object Drawing.Font('Segoe UI Symbol', 9)
+$mClose.Location = New-Object Drawing.Point(304, 12); $mClose.Size = New-Object Drawing.Size(28, 28)
+$script:role[$mFull] = 'flat'; $script:role[$mClose] = 'flat'
 $tip = New-Object Windows.Forms.ToolTip
 $tip.SetToolTip($mFull, $T.MiniFull); $tip.SetToolTip($mClose, $T.MiniClose)
 $mini.Controls.AddRange(@($mBtn, $mName, $mFull, $mClose))
@@ -1306,6 +1883,7 @@ function Update-MiniTray {
     if (-not $name) { $name = $(if ($playing) { $T.NoStation } else { 'SebRadio' }) }
     $sym = if ($playing) { [string][char]0x25A0 } else { [string][char]0x25B6 }
     if ($mBtn.Text -ne $sym) { $mBtn.Text = $sym }
+    if ($btnPlay.Text -ne $sym) { $btnPlay.Text = $sym; $tipMain.SetToolTip($btnPlay, $(if ($playing) { $T.Stop } else { $T.Play })) }
     if ($mName.Text -ne $name) { $mName.Text = $name; $tip.SetToolTip($mName, $name) }
     $miPlay.Text = $(if ($playing) { $T.Stop } else { $T.Play })
     $now = $lv.Items['Teraz gra'].SubItems[1].Text
@@ -1353,7 +1931,7 @@ $inpLbl = New-Object Windows.Forms.Label
 $inpLbl.Location = New-Object Drawing.Point(12, 12); $inpLbl.AutoSize = $true
 $inpTxt = New-Object Windows.Forms.TextBox
 $inpTxt.Location = New-Object Drawing.Point(12, 32); $inpTxt.Width = 356
-$inpOk = New-Btn $T.OK 212 68 75; $inpOk.DialogResult = 'OK'
+$inpOk = New-Btn $T.OK 212 68 75; $inpOk.DialogResult = 'OK'; $script:role[$inpOk] = 'accent'
 $inpCancel = New-Btn $T.Cancel 293 68 75; $inpCancel.DialogResult = 'Cancel'
 $inp.AcceptButton = $inpOk; $inp.CancelButton = $inpCancel
 $inp.Controls.AddRange(@($inpLbl, $inpTxt, $inpOk, $inpCancel))
@@ -1368,7 +1946,7 @@ function Show-Input($owner, [string]$title, [string]$prompt, [string]$default) {
 }
 
 # ---------- okno: ustawienia / settings dialog ----------
-$set = New-Dialog $T.SetTitle 430 204
+$set = New-Dialog $T.SetTitle 430 340
 $chkTray = New-Object Windows.Forms.CheckBox
 $chkTray.Text = $T.ToTray; $chkTray.Location = New-Object Drawing.Point(14, 14); $chkTray.Size = New-Object Drawing.Size(405, 22)
 $chkRec = New-Object Windows.Forms.CheckBox
@@ -1383,17 +1961,57 @@ $cmbLang.DropDownStyle = 'DropDownList'; $cmbLang.Location = New-Object Drawing.
 $lnkCfg = New-Object Windows.Forms.LinkLabel
 $lnkCfg.Text = $T.OpenCfg; $lnkCfg.Location = New-Object Drawing.Point(14, 140); $lnkCfg.AutoSize = $true
 $lnkCfg.Add_LinkClicked({ if (-not (Test-Path $cfgDir)) { [void](New-Item -ItemType Directory $cfgDir) }; Start-Process explorer.exe $cfgDir })
-$setOk = New-Btn $T.OK 262 168 75; $setOk.DialogResult = 'OK'
-$setCancel = New-Btn $T.Cancel 343 168 75; $setCancel.DialogResult = 'Cancel'
+# kolory / colors
+$setSep = New-Object Windows.Forms.Panel
+$setSep.Location = New-Object Drawing.Point(14, 170); $setSep.Size = New-Object Drawing.Size(402, 1)
+$script:role[$setSep] = 'sepF'
+$lblCol = New-Object Windows.Forms.Label
+$lblCol.Text = $T.Colors; $lblCol.Location = New-Object Drawing.Point(14, 180); $lblCol.AutoSize = $true
+$lblCol.Font = New-Object Drawing.Font('Segoe UI Semibold', 9)
+$lblColA = New-Object Windows.Forms.Label
+$lblColA.Text = $T.ColAccent; $lblColA.Location = New-Object Drawing.Point(14, 210); $lblColA.AutoSize = $true
+$lblColF = New-Object Windows.Forms.Label
+$lblColF.Text = $T.ColFinish; $lblColF.Location = New-Object Drawing.Point(14, 242); $lblColF.AutoSize = $true
+$lblColB = New-Object Windows.Forms.Label
+$lblColB.Text = $T.ColBg; $lblColB.Location = New-Object Drawing.Point(14, 274); $lblColB.AutoSize = $true
+$swA = New-Btn '' 200 205 60; $swF = New-Btn '' 200 237 60; $swB = New-Btn '' 200 269 60
+$swA.Tag = $script:clrAccent; $swF.Tag = $script:clrFinish; $swB.Tag = $script:clrBg
+foreach ($b in $swA, $swF, $swB) {
+    $script:role[$b] = 'swatch'
+    $b.Add_Click({
+        param($sender, $e)
+        $cd = New-Object Windows.Forms.ColorDialog
+        $cd.FullOpen = $true; $cd.Color = [Drawing.Color]$sender.Tag
+        if ($cd.ShowDialog($set) -eq 'OK') { $sender.Tag = $cd.Color; Apply-Theme $sender }
+    })
+}
+$btnColDef = New-Btn $T.ColDefault 276 237 140
+$btnColDef.Add_Click({
+    $swA.Tag = [Drawing.ColorTranslator]::FromHtml($themeDefaults[0])
+    $swF.Tag = [Drawing.ColorTranslator]::FromHtml($themeDefaults[1])
+    $swB.Tag = [Drawing.ColorTranslator]::FromHtml($themeDefaults[2])
+    foreach ($b in $swA, $swF, $swB) { Apply-Theme $b }
+})
+$tipMain.SetToolTip($swA, $T.ColHint); $tipMain.SetToolTip($swF, $T.ColHint); $tipMain.SetToolTip($swB, $T.ColHint)
+$setOk = New-Btn $T.OK 262 304 75; $setOk.DialogResult = 'OK'; $script:role[$setOk] = 'accent'
+$setCancel = New-Btn $T.Cancel 343 304 75; $setCancel.DialogResult = 'Cancel'
 $set.AcceptButton = $setOk; $set.CancelButton = $setCancel
-$set.Controls.AddRange(@($chkTray, $chkRec, $chkHist, $lblLang, $cmbLang, $lnkCfg, $setOk, $setCancel))
+$set.Controls.AddRange(@($chkTray, $chkRec, $chkHist, $lblLang, $cmbLang, $lnkCfg, $setSep, $lblCol, $lblColA, $lblColF, $lblColB, $swA, $swF, $swB, $btnColDef, $setOk, $setCancel))
 
 $btnSettings.Add_Click({
     $chkTray.Checked = $script:toTray
     $chkRec.Checked = $script:autoRec
     $chkHist.Checked = $script:logStream
     $cmbLang.SelectedIndex = $(if ($lang -eq 'pl') { 0 } else { 1 })
+    $swA.Tag = $script:clrAccent; $swF.Tag = $script:clrFinish; $swB.Tag = $script:clrBg
+    foreach ($b in $swA, $swF, $swB) { Apply-Theme $b }
     if ($set.ShowDialog($form) -ne 'OK') { return }
+    $newA = [Drawing.Color]$swA.Tag; $newF = [Drawing.Color]$swF.Tag; $newB = [Drawing.Color]$swB.Tag
+    if ($newA.ToArgb() -ne $script:clrAccent.ToArgb() -or $newF.ToArgb() -ne $script:clrFinish.ToArgb() -or $newB.ToArgb() -ne $script:clrBg.ToArgb()) {
+        $script:clrAccent = $newA; $script:clrFinish = $newF; $script:clrBg = $newB
+        Save-Colors
+        Apply-AllThemes
+    }
     $script:toTray = $chkTray.Checked
     $script:autoRec = $chkRec.Checked
     $script:logStream = $chkHist.Checked
@@ -1439,7 +2057,7 @@ $hdDel = New-Btn $T.HDelete 376 380 80
 $hdClear = New-Btn $T.HClear 460 380 90
 $hdOpen = New-Btn $T.HOpen 10 414 140
 $hdHint = New-Object Windows.Forms.Label
-$hdHint.Text = $T.HHint; $hdHint.Location = New-Object Drawing.Point(158, 420); $hdHint.Size = New-Object Drawing.Size(460, 20); $hdHint.ForeColor = [Drawing.Color]::DimGray
+$hdHint.Text = $T.HHint; $hdHint.Location = New-Object Drawing.Point(158, 420); $hdHint.Size = New-Object Drawing.Size(460, 20); $hdHint.ForeColor = [Drawing.Color]::DimGray; $script:role[$hdHint] = 'muted'
 $hdClose = New-Btn $T.Close 625 414 85; $hdClose.DialogResult = 'Cancel'
 $histDlg.CancelButton = $hdClose
 $histDlg.Controls.AddRange(@($hdLblS, $hdTxt, $hdSrc, $hdCount, $hdLv, $hdYt, $hdAm, $hdSz, $hdCopy, $hdDel, $hdClear, $hdOpen, $hdHint, $hdClose))
@@ -1670,7 +2288,7 @@ $lvRes.View = 'Details'; $lvRes.FullRowSelect = $true; $lvRes.GridLines = $true;
 [void]$lvRes.Columns.Add($T.ColTags, 170)
 $lblSr = New-Object Windows.Forms.Label
 $lblSr.Text = $T.SearchHint; $lblSr.Location = New-Object Drawing.Point(6, 306); $lblSr.Size = New-Object Drawing.Size(330, 32)
-$lblSr.ForeColor = [Drawing.Color]::DimGray
+$lblSr.ForeColor = [Drawing.Color]::DimGray; $script:role[$lblSr] = 'muted'
 $bsListen = New-Btn $T.Listen 342 308 96
 $bsAdd = New-Btn $T.AddMine 444 308 124
 $tabSearch.Controls.AddRange(@($lblQ, $txtQ, $lblCountry, $cmbCountry, $bsSearch, $lvRes, $lblSr, $bsListen, $bsAdd))
@@ -1694,7 +2312,7 @@ function Search-Stations {
         try {
             $wc = New-Object Net.WebClient
             $wc.Encoding = [Text.Encoding]::UTF8
-            $wc.Headers['User-Agent'] = 'SebRadio/3.2'
+            $wc.Headers['User-Agent'] = 'SebRadio/3.3'
             $res = $wc.DownloadString("https://$h/json/stations/search?$qs") | ConvertFrom-Json
             $ok = $true
             break
@@ -1739,10 +2357,16 @@ $bsAdd.Add_Click({
     $lblSr.Text = $T.AddedMine + $n
 })
 
-$btnManage.Add_Click({
+function Show-Stations([int]$tab) {
     Fill-Mine (Find-StationIndex $script:curUrl)
-    [void]$mgr.ShowDialog($form)
-})
+    $tabs.SelectedIndex = $tab
+    if ($tab -eq 1) { $mgr.ActiveControl = $txtQ }
+    if ($form.Visible) { [void]$mgr.ShowDialog($form) } else { [void]$mgr.ShowDialog() }
+}
+$btnManage.Add_Click({ Show-Stations 0 })
+$btnBarSt.Add_Click({ Show-Stations 0 })
+$btnBarSearch.Add_Click({ Show-Stations 1 })
+$btnStations.Add_Click({ $stMenu.Show($btnStations, 0, $btnStations.Height) })
 
 # ---------- zapisz / save ----------
 $btnSave.Add_Click({
@@ -1766,10 +2390,10 @@ $cmbSt.Add_SelectedIndexChanged({
 })
 $btnSleep.Add_Click({ $sleepMenu.Show($btnSleep, 0, $btnSleep.Height) })
 
-$form.Controls.AddRange(@($lblSt, $cmbSt, $btnSave, $btnManage, $btnMini, $btnSleep, $btnHist, $btnSettings, $grpRec, $lblUrl, $txtUrl, $btnPaste, $btnPlay, $btnStop, $lblVol, $trkVol, $lblVolVal, $lv, $lblEngine))
-$form.AcceptButton = $btnPlay
+$form.Controls.AddRange(@($lblUrl, $boxUrl, $btnPaste, $btnSave, $btnStations, $pnlNow, $btnPlay, $lblVol, $trkVol, $lblVolVal, $grpRec, $sepBar, $pnlBar))
+$txtUrl.Add_KeyDown({ param($sender, $e) if ($e.KeyCode -eq 'Enter') { $e.SuppressKeyPress = $true; Start-Radio } })
 
-$btnPlay.Add_Click({ Start-Radio })
+$btnPlay.Add_Click({ Toggle-Play; Update-MiniTray })
 $btnStop.Add_Click({ Stop-Radio })
 $btnShazam.Add_Click({
     if ($script:shazamBusy) { return }
@@ -1936,5 +2560,18 @@ $form.Add_FormClosing({
     try { $mini.Close() } catch {}
     [void][SebBass]::BASS_Free()
 })
+
+function Apply-AllThemes {
+    Update-Palette
+    $script:menuColors.Bg = $script:cPanel; $script:menuColors.Sel = $script:clrAccent; $script:menuColors.Line = $script:cLine
+    $script:menuRenderer.Fore = $script:cText; $script:menuRenderer.Muted = $script:cMuted; $script:menuRenderer.Check = $script:clrFinish
+    foreach ($f in @($form, $mini, $inp, $set, $histDlg, $mgr)) { Apply-Theme $f }
+    try { [SebTheme]::Round($mini.Handle) } catch {}
+    foreach ($m in @($trayMenu, $sleepMenu, $miniMenu, $stMenu, $cardMenu, $miStations.DropDown, $miSleep.DropDown)) {
+        $m.Renderer = $script:menuRenderer; $m.BackColor = $script:cPanel; $m.ForeColor = $script:cText
+    }
+    $lblNowTag.ForeColor = $script:clrFinish
+}
+Apply-AllThemes
 
 [System.Windows.Forms.Application]::Run($form)
