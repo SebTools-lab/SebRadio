@@ -70,7 +70,7 @@ pl = @{
     HColTime = 'Kiedy'; HColArtist = 'Wykonawca'; HColTitle = 'Tytuł'; HColStation = 'Stacja'; HColSource = 'Źródło'; HCount = 'Pozycji: {0}'
     HCopy = 'Kopiuj'; HDelete = 'Usuń'; HClear = 'Wyczyść...'; HOpen = 'Otwórz w Excelu'; HClearAsk = 'Usunąć całą historię ({0} pozycji)?'; HDelAsk = 'Usunąć zaznaczone pozycje ({0})?'
     HLogStream = 'Zapisuj w historii tytuły podawane przez stację (nie tylko z Shazama)'; HHint = 'Dwuklik = YouTube. Plik: %AppData%\SebRadio\historia.csv'
-    NowTag = 'Teraz gra'; RecHead = 'Rozpoznany utwór (Shazam)'; CopySong = 'Kopiuj tytuł utworu'; CopyStream = 'Kopiuj adres strumienia'; CopyDetails = 'Kopiuj wszystkie informacje'; SleepShort = 'Wyłącznik'; MiniShort = 'Mini'
+    LinkShort = 'Link do stacji'; RecShort = 'Rozpoznaj'; NowTag = 'Teraz gra'; RecHead = 'Rozpoznany utwór (Shazam)'; CopySong = 'Kopiuj tytuł utworu'; CopyStream = 'Kopiuj adres strumienia'; CopyDetails = 'Kopiuj wszystkie informacje'; SleepShort = 'Wyłącznik'; MiniShort = 'Mini'
     Colors = 'Kolory'; ColAccent = 'Akcent (przyciski):'; ColFinish = 'Wykończenie (linie, ramki):'; ColBg = 'Tło:'; ColDefault = 'Domyślne kolory'; ColHint = 'Kliknij kolorowy prostokąt, aby wybrać kolor.'
     Sleep = 'Wyłącznik czasowy'; SleepLeft = 'Wyłącznik: {0}'; SleepOff = 'Wyłączony'; SleepMin = '{0} min'; SleepEnd = 'Wyłącznik czasowy zatrzymał radio.'
     FileHeader = @('# SebRadio - zapisane stacje', '# Jedna stacja w linii:  Nazwa = link', '# Możesz dopisać wiele stacji naraz i zapisać plik - SebRadio wczyta je samo.', '# Linie zaczynające się od # są pomijane. Program zapisuje ten plik na nowo przy zmianach w oknie Stacje.')
@@ -117,7 +117,7 @@ en = @{
     HColTime = 'When'; HColArtist = 'Artist'; HColTitle = 'Title'; HColStation = 'Station'; HColSource = 'Source'; HCount = 'Entries: {0}'
     HCopy = 'Copy'; HDelete = 'Delete'; HClear = 'Clear...'; HOpen = 'Open in Excel'; HClearAsk = 'Delete the whole history ({0} entries)?'; HDelAsk = 'Delete the selected entries ({0})?'
     HLogStream = 'Save song titles sent by the station to the history (not only Shazam)'; HHint = 'Double-click = YouTube. File: %AppData%\SebRadio\historia.csv'
-    NowTag = 'Now playing'; RecHead = 'Recognized song (Shazam)'; CopySong = 'Copy song title'; CopyStream = 'Copy stream address'; CopyDetails = 'Copy all details'; SleepShort = 'Sleep'; MiniShort = 'Mini'
+    LinkShort = 'Station link'; RecShort = 'Recognize'; NowTag = 'Now playing'; RecHead = 'Recognized song (Shazam)'; CopySong = 'Copy song title'; CopyStream = 'Copy stream address'; CopyDetails = 'Copy all details'; SleepShort = 'Sleep'; MiniShort = 'Mini'
     Colors = 'Colors'; ColAccent = 'Accent (buttons):'; ColFinish = 'Trim (lines, borders):'; ColBg = 'Background:'; ColDefault = 'Default colors'; ColHint = 'Click a color box to pick a color.'
     Sleep = 'Sleep timer'; SleepLeft = 'Sleep timer: {0}'; SleepOff = 'Off'; SleepMin = '{0} min'; SleepEnd = 'The sleep timer stopped the radio.'
     FileHeader = @('# SebRadio - saved stations', '# One station per line:  Name = link', '# You can add many stations at once and save the file - SebRadio picks them up automatically.', '# Lines starting with # are ignored. The program rewrites this file when you change stations in the Stations window.')
@@ -737,23 +737,23 @@ function Get-Title([int]$h) {
     $meta = [SebBass]::GetTag($h, 5)
     if ($meta) {
         $m = [regex]::Match($meta, "StreamTitle='(.*?)';")
-        if ($m.Success) { $t = $m.Groups[1].Value.Trim(); if ($t) { return $t } else { return $T.Empty } }
+        if ($m.Success) { $tx = $m.Groups[1].Value.Trim(); if ($tx) { return $tx } else { return $T.Empty } }
     }
     $ogg = [SebBass]::GetTagList($h, 2)
     if ($ogg.Count -gt 0) {
         $o = @{}
         foreach ($l in $ogg) { $kv = $l -split '=', 2; if ($kv.Count -eq 2) { $o[$kv[0].ToUpper()] = $kv[1] } }
-        $t = (@($o['ARTIST'], $o['TITLE']) | Where-Object { $_ }) -join ' - '
-        if ($t) { return $t }
+        $tx = (@($o['ARTIST'], $o['TITLE']) | Where-Object { $_ }) -join ' - '
+        if ($tx) { return $tx }
     }
     $ext = [SebBass]::GetTag($h, 0x14000)
     if ($ext) {
         $i = $ext.IndexOf(',')
         if ($i -ge 0) {
-            $t = $ext.Substring($i + 1).Trim()
-            $tm = [regex]::Match($t, 'title="([^"]*)"')
-            if ($tm.Success) { $t = $tm.Groups[1].Value }
-            if ($t) { return $t }
+            $tx = $ext.Substring($i + 1).Trim()
+            $tm = [regex]::Match($tx, 'title="([^"]*)"')
+            if ($tm.Success) { $tx = $tm.Groups[1].Value }
+            if ($tx) { return $tx }
         }
     }
     if ($script:isHls) { return $T.NoTitleHls }
@@ -1103,11 +1103,11 @@ function Update-SleepText {
     if ($script:sleepAt) {
         $left = $script:sleepAt - (Get-Date)
         if ($left.TotalSeconds -lt 0) { $left = [TimeSpan]::Zero }
-        $t = $T.SleepLeft -f $left.ToString($(if ($left.TotalHours -ge 1) { 'h\:mm\:ss' } else { 'mm\:ss' }))
         $bt = $left.ToString($(if ($left.TotalHours -ge 1) { 'h\:mm\:ss' } else { 'mm\:ss' }))
-    } else { $t = $T.Sleep; $bt = $T.SleepShort }
+        $st = $T.SleepLeft -f $bt
+    } else { $st = $T.Sleep; $bt = $T.SleepShort }
     if ($btnSleep.Text -ne $bt) { $btnSleep.Text = $bt }
-    if ($miSleep.Text -ne $t) { $miSleep.Text = $t }
+    if ($miSleep.Text -ne $st) { $miSleep.Text = $st }
 }
 
 function Restart-App {
@@ -1536,20 +1536,20 @@ $tipMain.AutoPopDelay = 20000
 
 # link, wklej, zapisz, moje stacje / link, paste, save, my stations
 $lblUrl = New-Object Windows.Forms.Label
-$lblUrl.Text = $T.LinkLabel
+$lblUrl.Text = $T.LinkShort
 $lblUrl.Location = New-Object Drawing.Point(20, 14); $lblUrl.AutoSize = $true
 $script:role[$lblUrl] = 'muted'
 
-$boxUrl = New-Card 'box' 20 36 290 40
+$boxUrl = New-Card 'box' 20 36 340 40
 $txtUrl = New-Object Windows.Forms.TextBox
 $txtUrl.BorderStyle = 'None'; $txtUrl.Font = New-Object Drawing.Font('Segoe UI', 10)
-$txtUrl.Location = New-Object Drawing.Point(10, 11); $txtUrl.Width = 272
+$txtUrl.Location = New-Object Drawing.Point(10, 11); $txtUrl.Width = 322
 $boxUrl.Controls.Add($txtUrl)
 
 $btnPaste = New-Object Windows.Forms.Button
 $btnPaste.Text = [string][char]0xE77F; $btnPaste.Font = New-Object Drawing.Font($script:iconFont, 13)
 $btnPaste.Location = New-Object Drawing.Point(316, 36); $btnPaste.Size = New-Object Drawing.Size(44, 40)
-$tipMain.SetToolTip($btnPaste, ($T.PastePlay -replace '&&', '&'))
+$tipMain.SetToolTip($txtUrl, $T.LinkLabel)
 
 $btnSave = New-Object Windows.Forms.Button
 $btnSave.Text = [string][char]0xE734; $btnSave.Font = New-Object Drawing.Font($script:iconFont, 13)
@@ -1653,7 +1653,7 @@ $lblRec.AutoEllipsis = $true; $lblRec.Font = New-Object Drawing.Font('Segoe UI',
 $script:role[$lblRec] = 'muted'
 
 $btnShazam = New-Object Windows.Forms.Button
-$btnShazam.Text = $T.Recognize; $btnShazam.Location = New-Object Drawing.Point(326, 14); $btnShazam.Size = New-Object Drawing.Size(156, 40)
+$btnShazam.Text = $T.RecShort; $btnShazam.Location = New-Object Drawing.Point(326, 14); $btnShazam.Size = New-Object Drawing.Size(156, 40)
 $btnShazam.Font = New-Object Drawing.Font('Segoe UI Semibold', 9.5)
 $btnShazam.TextImageRelation = 'ImageBeforeText'
 $script:role[$btnShazam] = 'accent'
@@ -1674,6 +1674,7 @@ $btnCopyArtist.Text = [string][char]0xE8C8; $btnCopyArtist.Font = New-Object Dra
 $btnCopyArtist.Location = New-Object Drawing.Point(444, 76); $btnCopyArtist.Size = New-Object Drawing.Size(38, 34); $btnCopyArtist.Enabled = $false
 $script:role[$btnCopyArtist] = 'flat'
 $tipMain.SetToolTip($btnCopyArtist, $T.Copy)
+$tipMain.SetToolTip($btnShazam, $T.Recognize)
 
 $lblTitle = New-Object Windows.Forms.Label
 $lblTitle.Text = $T.Title -replace ':$', ''; $lblTitle.Location = New-Object Drawing.Point(18, 122); $lblTitle.AutoSize = $true
@@ -1701,8 +1702,8 @@ Set-Glyph $btnShazam 0xE8D6 16 'onAccent' 'lead'
 
 $grpRec.Controls.AddRange(@($lblRecHead, $lblRec, $btnShazam, $recSep, $lblArtist, $txtArtist, $btnCopyArtist, $lblTitle, $txtTitle, $btnCopyTitle, $btnYouTube, $btnApple))
 
-function Copy-Text([string]$t) {
-    if ($t) { [Windows.Forms.Clipboard]::SetText($t); $lblRec.Text = $T.Copied + $t }
+function Copy-Text([string]$txt) {
+    if ($txt) { [Windows.Forms.Clipboard]::SetText($txt); $lblRec.Text = $T.Copied + $txt }
 }
 
 # dolny pasek z ikonami / bottom icon bar
@@ -1719,25 +1720,24 @@ $btnBarSearch = New-Object Windows.Forms.Button; $btnBarSearch.Text = ($T.Search
 $btnHist = New-Object Windows.Forms.Button; $btnHist.Text = ($T.History -replace '\.+$', '')
 $btnSleep = New-Object Windows.Forms.Button; $btnSleep.Text = $T.SleepShort
 $btnSettings = New-Object Windows.Forms.Button; $btnSettings.Text = ($T.Settings -replace '\.+$', '')
-$barBtns = @($btnMini, $btnBarSt, $btnBarSearch, $btnHist, $btnSleep, $btnSettings)
-$barGlyphs = @(0xE8A7, 0xE8FD, 0xE721, 0xE81C, 0xE708, 0xE713)
-for ($i = 0; $i -lt 6; $i++) {
+$barBtns = @($btnBarSt, $btnBarSearch, $btnHist, $btnSleep, $btnSettings)
+$barGlyphs = @(0xE8FD, 0xE721, 0xE81C, 0xE708, 0xE713)
+for ($i = 0; $i -lt 5; $i++) {
     $b = $barBtns[$i]
-    $b.Location = New-Object Drawing.Point((12 + 86 * $i), 6); $b.Size = New-Object Drawing.Size(86, 58)
+    $b.Location = New-Object Drawing.Point((10 + 104 * $i), 6); $b.Size = New-Object Drawing.Size(104, 58)
     $b.Font = New-Object Drawing.Font('Segoe UI', 8.5)
     $b.TextImageRelation = 'ImageAboveText'; $b.ImageAlign = 'BottomCenter'; $b.TextAlign = 'TopCenter'
     $script:role[$b] = 'flat'
     Set-Glyph $b $barGlyphs[$i] 20 'link' 'top'
 }
-$tipMain.SetToolTip($btnMini, $T.Mini)
 $tipMain.SetToolTip($btnSleep, $T.Sleep)
 $pnlBar.Controls.AddRange($barBtns)
 $sleepMenu = New-Object Windows.Forms.ContextMenuStrip
 
 function Get-InfoText([string]$n) {
-    $t = $lv.Items[$n].SubItems[1].Text
-    if ($t -eq '-') { return '' }
-    return $t
+    $tx = $lv.Items[$n].SubItems[1].Text
+    if ($tx -eq '-') { return '' }
+    return $tx
 }
 function Get-AllInfo {
     $lines = @()
@@ -2390,7 +2390,7 @@ $cmbSt.Add_SelectedIndexChanged({
 })
 $btnSleep.Add_Click({ $sleepMenu.Show($btnSleep, 0, $btnSleep.Height) })
 
-$form.Controls.AddRange(@($lblUrl, $boxUrl, $btnPaste, $btnSave, $btnStations, $pnlNow, $btnPlay, $lblVol, $trkVol, $lblVolVal, $grpRec, $sepBar, $pnlBar))
+$form.Controls.AddRange(@($lblUrl, $boxUrl, $btnSave, $btnStations, $pnlNow, $btnPlay, $lblVol, $trkVol, $lblVolVal, $grpRec, $sepBar, $pnlBar))
 $txtUrl.Add_KeyDown({ param($sender, $e) if ($e.KeyCode -eq 'Enter') { $e.SuppressKeyPress = $true; Start-Radio } })
 
 $btnPlay.Add_Click({ Toggle-Play; Update-MiniTray })
@@ -2487,9 +2487,9 @@ $timer.Add_Tick({
         if (-not $sync.Done) { Set-Info 'Status' ($T.ConnectingT -f ((Get-Date) - $script:clickTime).TotalSeconds); return }
         if ($sync.Handle -eq 0) {
             $c = [int]$sync.Error
-            $t = $errText[$c]; if (-not $t) { $t = "$($T.ECode) $c" }
+            $et = $errText[$c]; if (-not $et) { $et = "$($T.ECode) $c" }
             if ($script:autoRec -and $script:recAttempt -gt 0) { Schedule-Reconnect; return }
-            Set-Info 'Status' ($T.Error + $t)
+            Set-Info 'Status' ($T.Error + $et)
             $script:clickTime = $null
             Mark-Current
             return
