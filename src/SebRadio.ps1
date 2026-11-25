@@ -1323,9 +1323,11 @@ $cardPaint = {
     $rad = $(if ($rl -eq 'box') { 6 } else { 10 })
     $g.Clear($pb)
     $g.SmoothingMode = 'AntiAlias'
-    $gp = New-RoundPath 0 0 ($s.Width - 1) ($s.Height - 1) $rad
+    $pw = $(if ($s -eq $script:pnlNow) { 3 } elseif ($rl -eq 'cardF') { 2 } else { 1 })
+    $in = $(if ($pw -gt 1) { $pw / 2.0 } else { 0 })
+    $gp = New-RoundPath $in $in ($s.Width - 1 - 2 * $in) ($s.Height - 1 - 2 * $in) $rad
     $br = New-Object Drawing.SolidBrush($s.BackColor); $g.FillPath($br, $gp); $br.Dispose()
-    $p = New-Object Drawing.Pen($col, 1); $g.DrawPath($p, $gp); $p.Dispose(); $gp.Dispose()
+    $p = New-Object Drawing.Pen($col, $pw); $g.DrawPath($p, $gp); $p.Dispose(); $gp.Dispose()
 }
 function New-Card([string]$r, [int]$x, [int]$y, [int]$w, [int]$h) {
     $p = New-Object Windows.Forms.Panel
@@ -1395,6 +1397,24 @@ $btnPaint = {
             [Windows.Forms.TextRenderer]::DrawText($g, $s.Text, $s.Font, (New-Object Drawing.Rectangle($xt, 0, ($tw + 4), $s.Height)), $fore, $nf)
         }
         $gf.Dispose()
+    } elseif ($rl -eq 'round' -and ($s.Text -eq [string][char]0x25B6 -or $s.Text -eq [string][char]0x25A0)) {
+        # ikona graj/stop rysowana wektorowo, wyśrodkowana / vector play/stop icon, centred
+        $cx = ($s.Width - 1) / 2.0; $cy = ($s.Height - 1) / 2.0
+        $u = [Math]::Min($s.Width, $s.Height) * 0.30
+        $ib = New-Object Drawing.SolidBrush($fore)
+        if ($s.Text -eq [string][char]0x25B6) {
+            $ox = $u * 0.12
+            $pts = [Drawing.PointF[]]@(
+                (New-Object Drawing.PointF([single]($cx - $u * 0.5 + $ox), [single]($cy - $u * 0.58))),
+                (New-Object Drawing.PointF([single]($cx + $u * 0.5 + $ox), [single]$cy)),
+                (New-Object Drawing.PointF([single]($cx - $u * 0.5 + $ox), [single]($cy + $u * 0.58))))
+            $g.FillPolygon($ib, $pts)
+        } else {
+            $q = $u * 0.82
+            $sq = New-RoundPath ($cx - $q / 2) ($cy - $q / 2) $q $q 2
+            $g.FillPath($ib, $sq); $sq.Dispose()
+        }
+        $ib.Dispose()
     } else {
         [Windows.Forms.TextRenderer]::DrawText($g, $s.Text, $s.Font, $s.ClientRectangle, $fore, $fl)
     }
@@ -1642,7 +1662,7 @@ $lblEngine.Text = $T.Engine + ': BASS {0}.{1}.{2}.{3}' -f (($v -shr 24) -band 25
 if ($plugins.Count) { $lblEngine.Text += '  +  ' + ($plugins -join ', ') }
 
 # ---------- panel rozpoznawania ----------
-$grpRec = New-Card 'card' 20 318 500 204
+$grpRec = New-Card 'cardF' 20 318 500 204
 $lblRecHead = New-Object Windows.Forms.Label
 $lblRecHead.Text = $T.RecHead; $lblRecHead.Location = New-Object Drawing.Point(18, 14); $lblRecHead.AutoSize = $true
 $lblRecHead.Font = New-Object Drawing.Font('Segoe UI', 9.5)
