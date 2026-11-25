@@ -1014,10 +1014,49 @@ function Get-YouTubeLink([string]$a, [string]$t) {
     $q = (@($a, $t) | Where-Object { $_ }) -join ' '
     return 'https://www.youtube.com/results?search_query=' + [Uri]::EscapeDataString($q)
 }
+function Get-AppleCountry {
+    $cc = 'pl'
+    try { $r = [Globalization.RegionInfo]::CurrentRegion.TwoLetterISORegionName.ToLower(); if ($r -match '^[a-z]{2}$') { $cc = $r } } catch {}
+    return $cc
+}
 function Get-AppleLink([string]$id, [string]$a, [string]$t) {
-    if ($id) { return "https://music.apple.com/song/$id" }
+    $cc = Get-AppleCountry
+    if ($id) { return "https://music.apple.com/$cc/song/$id" }
     $q = (@($a, $t) | Where-Object { $_ }) -join ' '
-    return 'https://music.apple.com/search?term=' + [Uri]::EscapeDataString($q)
+    return "https://music.apple.com/$cc/search?term=" + [Uri]::EscapeDataString($q)
+}
+# otwiera link w domyślnej przeglądarce z pominięciem aplikacji (np. Apple Music) / opens a URL in the default browser, bypassing apps that claim the link
+function Open-InBrowser([string]$url) {
+    try {
+        $pid0 = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice' -ErrorAction Stop).ProgId
+        $cmd = $null
+        foreach ($root in 'HKCU:\Software\Classes', 'HKLM:\Software\Classes') {
+            $k = Join-Path $root "$pid0\shell\open\command"
+            if (Test-Path -LiteralPath $k) { $cmd = (Get-ItemProperty -LiteralPath $k).'(default)'; if ($cmd) { break } }
+        }
+        if ($cmd -and ($cmd -match '^\s*"([^"]+)"' -or $cmd -match '^\s*(\S+)')) {
+            $exe = $Matches[1]
+            if (Test-Path -LiteralPath $exe) { Start-Process -FilePath $exe -ArgumentList ('"' + $url + '"'); return }
+        }
+    } catch {}
+    Start-Process $url
+}
+# dokładny link do utworu w Apple Music (strona utworu w albumie) / exact Apple Music song page link
+function Resolve-AppleLink([string]$id, [string]$a, [string]$t) {
+    $cc = Get-AppleCountry
+    $q = (@($a, $t) | Where-Object { $_ }) -join ' '
+    try {
+        if ($id) { $u = "https://itunes.apple.com/lookup?id=$id&country=$cc&entity=song" }
+        elseif ($q) { $u = 'https://itunes.apple.com/search?term=' + [Uri]::EscapeDataString($q) + "&country=$cc&media=music&entity=song&limit=1" }
+        else { return '' }
+        $wc = New-Object Net.WebClient
+        $wc.Encoding = [Text.Encoding]::UTF8
+        $j = $wc.DownloadString($u) | ConvertFrom-Json
+        $wc.Dispose()
+        $hit = @($j.results | Where-Object { $_.wrapperType -eq 'track' -and $_.trackViewUrl }) | Select-Object -First 1
+        if ($hit) { return ([string]$hit.trackViewUrl -replace '[?&]uo=\d+', '') }
+    } catch {}
+    return (Get-AppleLink $id $a $t)
 }
 function ConvertTo-HistLines($items) {
     return @($items | Select-Object Time, Source, Artist, Title, Station, Shazam, AppleMusic, YouTube | ConvertTo-Csv -Delimiter ';' -NoTypeInformation)
@@ -1323,7 +1362,7 @@ $cardPaint = {
     $rad = $(if ($rl -eq 'box') { 6 } else { 10 })
     $g.Clear($pb)
     $g.SmoothingMode = 'AntiAlias'
-    $pw = $(if ($s -eq $script:pnlNow) { 3 } elseif ($rl -eq 'cardF') { 2 } else { 1 })
+    $pw = $(if ($s -eq $script:pnlNow) { 3 } elseif ($s -eq $script:grpRec) { 1 } elseif ($rl -eq 'cardF') { 2 } else { 1 })
     $in = $(if ($pw -gt 1) { $pw / 2.0 } else { 0 })
     $gp = New-RoundPath $in $in ($s.Width - 1 - 2 * $in) ($s.Height - 1 - 2 * $in) $rad
     $br = New-Object Drawing.SolidBrush($s.BackColor); $g.FillPath($br, $gp); $br.Dispose()
@@ -2117,7 +2156,7 @@ $hdSrc.Add_SelectedIndexChanged({ Fill-History })
 $hdLv.Add_SelectedIndexChanged({ Update-HistButtons })
 $hdYt.Add_Click({ $s = @(Get-HistSel); if ($s.Count) { Start-Process $s[0].YouTube } })
 $hdLv.Add_DoubleClick({ $s = @(Get-HistSel); if ($s.Count) { Start-Process $s[0].YouTube } })
-$hdAm.Add_Click({ $s = @(Get-HistSel); if ($s.Count) { Start-Process $s[0].AppleMusic } })
+$hdAm.Add_Click({ $s = @(Get-HistSel); if ($s.Count) { Open-InBrowser $s[0].AppleMusic } })
 $hdSz.Add_Click({ $s = @(Get-HistSel); if ($s.Count -and $s[0].Shazam) { Start-Process $s[0].Shazam } })
 $hdCopy.Add_Click({
     $s = @(Get-HistSel)
@@ -2442,9 +2481,9 @@ $btnYouTube.Add_Click({
     if ($q) { Start-Process ('https://www.youtube.com/results?search_query=' + [Uri]::EscapeDataString($q)) }
 })
 $btnApple.Add_Click({
-    if ($script:appleId) { Start-Process "https://music.apple.com/song/$($script:appleId)"; return }
-    $q = Get-Query
-    if ($q) { Start-Process ('https://music.apple.com/search?term=' + [Uri]::EscapeDataString($q)) }
+    $form.Cursor = 'WaitCursor'
+    try { $u = Resolve-AppleLink $script:appleId $txtArtist.Text $txtTitle.Text } finally { $form.Cursor = 'Default' }
+    if ($u) { Open-InBrowser $u }
 })
 $trkVol.Add_Scroll({
     try { Set-Content -Path $volFile -Value $trkVol.Value -Encoding ASCII } catch {}
