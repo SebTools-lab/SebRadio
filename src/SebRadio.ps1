@@ -769,7 +769,9 @@ function Update-StreamInfo([int]$h) {
     $srv = $hd['server']; if (-not $srv) { $srv = $hd['icy-notice2'] }
     if (-not $srv -and $script:streamUrl -match '^https?://') { $srv = ([Uri]$script:streamUrl).Host }
     Set-Info 'Serwer' ($srv -replace '<br\s*/?>', '')
-    if ($hd['icy-name']) { $form.Text = "SebRadio - $($hd['icy-name'])"; $script:stationName = $hd['icy-name'] }
+    # icy-name bywa samym identyfikatorem (np. 632cb48f613bac0856b931ab) - pomijamy / icy-name can be a bare ID - skip it
+    $iname = ([string]$hd['icy-name']).Trim()
+    if ($iname -and $iname -notmatch '^[0-9a-fA-F{}-]{16,}$') { $script:stationName = $iname }
 
     $info = New-Object BASS_CHANNELINFO
     if ([SebBass]::BASS_ChannelGetInfo($h, [ref]$info)) {
@@ -1814,6 +1816,8 @@ function Update-NowCard {
         if (-not $name -and $script:streamUrl -match '^https?://') { $name = ([Uri]$script:streamUrl).Host }
     }
     if (-not $name) { $name = 'SebRadio' }
+    $ft = $(if ($name -ne 'SebRadio') { "SebRadio - $name" } else { 'SebRadio' })
+    if ($form.Text -ne $ft) { $form.Text = $ft }
     $song = $(if ($playing) { Get-InfoText 'Teraz gra' } else { '' })
     $meta = @(@((Get-InfoText 'Format'), (Get-InfoText 'Bitrate'), (Get-InfoText 'Częstotliwość'), (Get-InfoText 'Kanały')) | Where-Object { $_ })
     $st = Get-InfoText 'Czas startu'
